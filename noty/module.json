@@ -1,0 +1,57 @@
+{
+  "api": 1,
+  "name": "Noty",
+  "version": "0.2.0",
+  "author": "FranjeGueje",
+  "description": "Show Steam notifications from your own scripts and from programs like Comet: POST JSON to a local web service.",
+  "order": 40,
+  "tab": "Noty",
+  "settings": [
+    {
+      "key": "enabled",
+      "type": "toggle",
+      "label": "Active",
+      "default": true,
+      "hint": "Turns the web service on or off. It listens on 127.0.0.1 only: programs on this machine can send notifications, nothing else on the network can."
+    },
+    {
+      "key": "port",
+      "type": "number",
+      "label": "Port",
+      "min": 1024,
+      "max": 65535,
+      "default": 33811,
+      "hint": "Where the service listens: http://127.0.0.1:<port>/notify. Turn the service off to change it.",
+      "disabled_when": {
+        "enabled": true
+      }
+    },
+    {
+      "key": "dnd",
+      "type": "toggle",
+      "label": "Do not disturb",
+      "default": false,
+      "hint": "Requests are still received and answered, but nothing is shown on Steam. The test button still works."
+    },
+    {
+      "section": "Endpoints",
+      "open": false,
+      "items": [
+        {
+          "key": "endpoint_general",
+          "type": "toggle",
+          "label": "General — /notify",
+          "default": true,
+          "hint": "Noty's own format: {\"title\", \"body\", \"icon\"}. Off: requests are answered, but nothing is shown."
+        },
+        {
+          "key": "endpoint_comet",
+          "type": "toggle",
+          "label": "Comet — /notify/comet",
+          "default": true,
+          "hint": "Achievements unlocked in GOG games run through Comet. Off: requests are answered, but nothing is shown."
+        }
+      ]
+    }
+  ]
+}
