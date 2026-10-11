@@ -1,132 +1,64 @@
 """Noty: show Steam notifications (as Steam shows an achievement) from a local web service.
 
 Programs on this machine POST JSON to http://127.0.0.1:<port>/notify, or to the endpoint
-of their own format (/notify/comet…, service.py), and Invasor's core shows it
+of their own format (/notify/comet…, see endpoints.py), and Invasor's core shows it
 (ctx.notify). If Steam can't show notifications, the request gets a 503 and nothing else
 is affected; if the port is taken, the tab says so. Each endpoint can be turned off, and
 "do not disturb" silences them all; both are read live, without restarting the service.
+Each endpoint is told when it starts and stops (endpoints.Endpoint), and can announce itself.
 """
-import os
-import subprocess
 import threading
-import time
-from pathlib import Path
 
-from . import games, service
-
-# Comety (bin/comety) watches a Comet database and POSTs each new achievement to /notify/comet.
-# One runs per database Comet keeps for the game being played: found a few seconds after it starts.
-COMETY_BIN = Path(__file__).resolve().parent / "bin" / "comety"
-# After a game starts, look for its databases after GAME_DELAY seconds (Comet creates them late),
-# and, if there are none, RETRIES more times, GAME_RETRY seconds apart.
-GAME_DELAY, GAME_RETRY, RETRIES = 10.0, 10.0, 2
-GAME_POLL = 2.0
+from . import endpoints as endpoints_mod
+from . import service
 
 ctx = None
 server = None
 error = None
-comety = {}  # database -> subprocess, for the running game
+eps = {}  # name -> Endpoint
+host = None
 _lock = threading.Lock()
-_stop = threading.Event()
-_watcher = None
 
 
-def _stop_comety():
-    """Stop every comety (their databases are kept in `comety`, for _start_comety)."""
-    for p in comety.values():
-        if p:
-            p.terminate()
-    for p in comety.values():
-        if p:
-            try:
-                p.wait(5)
-            except subprocess.TimeoutExpired:
-                p.kill()
-                p.wait()
-    comety.update({db: None for db in comety})
+class Host:
+    """What an endpoint can use of Noty."""
 
+    def __init__(self, context):
+        self.ctx, self.log = context, context.log
 
-def _start_comety(port, dbs=None):
-    """Run a comety per database (the new ones, or all of them), against the same URL as
-    /notify/comet. Never raises."""
-    for db in comety if dbs is None else dbs:
-        try:
-            os.chmod(COMETY_BIN, 0o755)  # the installer doesn't keep the executable bit
-            comety[db] = subprocess.Popen(
-                [str(COMETY_BIN), "--url", f"http://127.0.0.1:{port}/notify/comet", "--quiet", db],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError as e:
-            ctx.log.warning("can't run comety: %s", e.strerror or e)
+    @property
+    def port(self):
+        return server.port if server else None
+
+    def announce(self, endpoint, title, body="", icon=""):
+        """A message of the endpoint itself, with its image unless there's a better icon. It
+        follows "do not disturb" and the rate limit; it doesn't need the endpoint to be on."""
+        s = server
+        if not s:
             return
-        ctx.log.info("comety watching %s", db)
-
-
-def _logo(appid):
-    for path in games.logo_files(appid):
         try:
-            return service.icon_from_file(path)
-        except service.Rejected:
-            continue  # too big, or not an image: the next one
-    return ""
+            s.receive(endpoint.name, title[:64], body[:256], icon or endpoint.icon_data(), announce=True)
+        except service.Rejected as e:
+            self.log.warning("%s: message not shown: %s", endpoint.name, e)
 
 
-def _connect(appid, name, dbs):
-    """Databases of the game found: watch them and, the first time, tell the user."""
-    with _lock:
-        if not server or _stop.is_set():
-            return False
-        first = not comety
-        for db in dbs:
-            comety[db] = None
-        _start_comety(server.port, dbs)
-        if first:
-            try:
-                server.receive("comet", f"Comet - {name}"[:64], f"Noty is connecting to {name}"[:256], _logo(appid))
-            except service.Rejected as e:
-                ctx.log.warning("notification not shown: %s", e)
-    return True
+def _on(endpoint):
+    return bool(ctx.settings.get(f"endpoint_{endpoint.name}"))
 
 
-def _watch():
-    """Follow the running game and look for its databases (see GAME_DELAY), while the Comet
-    endpoint is on. Never raises."""
-    current, due, retries = None, 0.0, 0
-    while not _stop.wait(GAME_POLL):
+def _stop_endpoints():
+    for ep in eps.values():
         try:
-            if not ctx.settings.get("endpoint_comet"):
-                # Comet's endpoint is off: no comety, no looking for databases. Turned on again
-                # with a game running, it counts as a game that has just started.
-                if current is not None or comety:
-                    current = None
-                    with _lock:
-                        _stop_comety()
-                        comety.clear()
-                continue
-            game = ctx.game.running
-            appid = game["appid"] if game else None
-            if appid != current:
-                current, due, retries = appid, time.monotonic() + GAME_DELAY, RETRIES
-                with _lock:
-                    _stop_comety()
-                    comety.clear()
-            if not appid or not server or time.monotonic() < due or retries < 0:
-                continue
-            dbs = games.gameplay_dbs(appid)
-            if dbs:
-                _connect(appid, game.get("name") or appid, dbs)
-                retries = -1  # found: done with this game
-            else:
-                ctx.log.info("no Comet database yet for %s (%s retries left)", appid, retries)
-                due, retries = time.monotonic() + GAME_RETRY, retries - 1
+            ep.stop()
         except Exception:
-            ctx.log.exception("watching games failed")
+            ctx.log.exception("%s: stopping failed", ep.name)
 
 
 def _start():
     """(Re)start the service with the current settings. Never raises."""
     global server, error
     with _lock:
-        _stop_comety()
+        _stop_endpoints()
         if server:
             server.stop()
             server = None
@@ -134,7 +66,7 @@ def _start():
         if not ctx.settings.get("enabled"):
             return
         port = ctx.settings.get("port")
-        s = service.NotyServer(port, ctx.notify, ctx.log, unavailable=(ctx.Unavailable,),
+        s = service.NotyServer(port, ctx.notify, ctx.log, endpoints=eps.values(), unavailable=(ctx.Unavailable,),
                                endpoint_on=lambda name: ctx.settings.get(f"endpoint_{name}"),
                                quiet=lambda: ctx.settings.get("dnd"))
         try:
@@ -145,29 +77,53 @@ def _start():
             return
         server = s
         ctx.log.info("listening on http://127.0.0.1:%s/notify", port)
-        _start_comety(s.port)
+        for ep in eps.values():
+            if _on(ep):
+                _safely(ep.start, host)
+
+
+def _safely(call, *args):
+    try:
+        call(*args)
+    except Exception:
+        ctx.log.exception("endpoint hook failed")
+
+
+def _toggle(key, value):
+    """The user turned an endpoint on or off."""
+    ep = eps.get(key[len("endpoint_"):])
+    with _lock:
+        if not ep or not server:
+            return
+        if value:
+            _safely(ep.start, host)
+            _safely(ep.connected, host)
+        else:
+            _safely(ep.disconnected, host)
+            _safely(ep.stop)
+
+
+def _changed(key, value):
+    # Only these need a new server: endpoints and "do not disturb" are read live.
+    if key in ("enabled", "port"):
+        _start()
+    elif key.startswith("endpoint_"):
+        _toggle(key, value)
 
 
 def setup(context):
-    global ctx, _watcher
+    global ctx, host, eps
     ctx = context
-    # Only these need a new server: endpoints and "do not disturb" are read live.
-    context.settings.on_change(lambda key, value: _start() if key in ("enabled", "port") else None)
+    host = Host(context)
+    eps = endpoints_mod.build()
+    context.settings.on_change(_changed)
     _start()
-    _stop.clear()
-    _watcher = threading.Thread(target=_watch, name="noty-games", daemon=True)
-    _watcher.start()
 
 
 def teardown():
-    global server, _watcher
-    _stop.set()
-    if _watcher:
-        _watcher.join(5)
-        _watcher = None
+    global server
     with _lock:
-        _stop_comety()
-        comety.clear()
+        _stop_endpoints()
         if server:
             server.stop()
             server = None
@@ -176,13 +132,11 @@ def teardown():
 def status():
     port = ctx.settings.get("port")
     base = f"http://127.0.0.1:{port}"
-    endpoints = [{"name": name, "path": path, "url": base + path, "on": ctx.settings.get(f"endpoint_{name}")}
-                 for name, (path, _) in service.ENDPOINTS.items()]
-    with _lock:
-        watching = [{"db": db, "running": p is not None and p.poll() is None} for db, p in comety.items()]
-    return {"enabled": ctx.settings.get("enabled"), "running": server is not None, "port": port,
-            "url": base + "/notify", "error": error, "comety": watching,
-            "dnd": ctx.settings.get("dnd"), "endpoints": endpoints}
+    running = server is not None
+    listed = [{"name": ep.name, "path": ep.path, "url": base + ep.path, "on": _on(ep),
+               "details": ep.details() if running and _on(ep) else []} for ep in eps.values()]
+    return {"enabled": ctx.settings.get("enabled"), "running": running, "port": port,
+            "url": base + "/notify", "error": error, "dnd": ctx.settings.get("dnd"), "endpoints": listed}
 
 
 def recent():

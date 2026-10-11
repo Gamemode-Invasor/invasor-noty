@@ -9,7 +9,10 @@ import unittest
 import zlib
 from pathlib import Path
 
-import service
+from tests.loader import load_backend, submodule
+
+BACKEND = load_backend()
+service = BACKEND.service
 
 
 class Unavailable(RuntimeError):
@@ -28,7 +31,8 @@ class Server(unittest.TestCase):
 
     def setUp(self):
         self.sent, self.fail = [], None
-        self.on, self.dnd = {name: True for name in service.ENDPOINTS}, False
+        self.endpoints = BACKEND.endpoints_mod.build()
+        self.on, self.dnd = {name: True for name in self.endpoints}, False
 
         def send(title, body, icon):
             if self.fail:
@@ -37,7 +41,8 @@ class Server(unittest.TestCase):
                 raise ValueError("a notification needs a title")
             self.sent.append((title, body, icon))
 
-        self.s = service.NotyServer(0, send, logging.getLogger("test.noty"), unavailable=(Unavailable,),
+        self.s = service.NotyServer(0, send, logging.getLogger("test.noty"), endpoints=self.endpoints.values(),
+                                    unavailable=(Unavailable,),
                                     endpoint_on=lambda name: self.on[name], quiet=lambda: self.dnd)
         self.s.start()
         self.addCleanup(self.s.stop)

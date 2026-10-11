@@ -3,11 +3,10 @@
 Pure stdlib, no Invasor imports: tested on its own (tests/test_service.py). It listens
 on 127.0.0.1 only, so only programs on this machine can use it.
 
-    POST /notify         {"title": "…", "body": "…", "icon": "https://…" | "data:image/…" | "/path/to/image.png"}
-    POST /notify/comet   Comet's (GOG) unlocked achievement: {"name": "…", "description": "…", …}
-    GET  /               {"ok": true, "service": "noty", "endpoints": [...]}
+    POST <path>   an endpoint's payload (endpoint_*.py: /notify, /notify/comet…)
+    GET  /        {"ok": true, "service": "noty", "endpoints": [...]}
 
-Each endpoint has an adapter (ENDPOINTS) that turns its payload into (title, body, icon),
+Each endpoint (endpoints.py) has an adapt() that turns its payload into (title, body, icon),
 or None for an event that isn't shown. An endpoint can be turned off, and "do not
 disturb" silences them all: the request is still checked and answered (200, shown:
 false), but nothing is shown.
@@ -23,7 +22,6 @@ import collections
 import json
 import threading
 import time
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -31,7 +29,6 @@ HOST = "127.0.0.1"
 MAX_BODY = 768 << 10  # room for an embedded image (data:…) of up to 512 KB
 MAX_ICON_FILE = 384 << 10
 RATE, RATE_WINDOW = 5, 10.0
-MAX_UNLOCK_AGE = 300  # seconds: an older unlock is Comet syncing what you had, not something new
 IMAGE_TYPES = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif", ".webp": "webp"}
 MAGIC = {"png": b"\x89PNG", "jpeg": b"\xff\xd8\xff", "gif": b"GIF8", "webp": b"RIFF"}
 
@@ -83,50 +80,6 @@ def validate(title, body, icon):
     return title, body, icon
 
 
-def native(data):
-    """/notify: Noty's own format, strict (a typo in a field name is an error)."""
-    unknown = set(data) - {"title", "body", "icon"}
-    if unknown:
-        raise Rejected(400, f"unknown field(s): {', '.join(sorted(unknown))}")
-    return data.get("title"), data.get("body", ""), data.get("icon", "")
-
-
-def just_unlocked(unlock_time):
-    """Whether Comet's unlock_time ("2026-07-31T01:48:51+0000") is recent. Comety sends every
-    update of an achievement, including a new database being filled with what you already had."""
-    try:
-        when = datetime.strptime(unlock_time, "%Y-%m-%dT%H:%M:%S%z")
-    except (TypeError, ValueError):
-        return False
-    return (datetime.now(timezone.utc) - when).total_seconds() <= MAX_UNLOCK_AGE
-
-
-def comet(data):
-    """/notify/comet: an unlocked achievement, as Comet sends it (the achievement itself, flat).
-    Lenient: Comet may add fields at any time. Only a recent unlock is shown; any other
-    update (not unlocked, unlocked long ago) is ignored (None)."""
-    if not isinstance(data.get("name"), str):
-        raise Rejected(400, "name is required")
-    if not just_unlocked(data.get("unlock_time")):
-        return None
-    body = data.get("description")
-    body = body if isinstance(body, str) else ""
-    rarity = data.get("rarity")
-    if isinstance(rarity, (int, float)) and not isinstance(rarity, bool):
-        body = f"{body} · {rarity:.1f}%" if body else f"{rarity:.1f}%"
-    url = data.get("image_url_unlocked")
-    icon = url if isinstance(url, str) and url.startswith("https://") else ""
-    return data["name"], body, icon
-
-
-# name -> (path, adapter). The name is the endpoint's setting: endpoint_<name>.
-ENDPOINTS = {
-    "general": ("/notify", native),
-    "comet": ("/notify/comet", comet),
-}
-ROUTES = {path: (name, adapter) for name, (path, adapter) in ENDPOINTS.items()}
-
-
 class RateLimit:
     def __init__(self, count=RATE, window=RATE_WINDOW, clock=time.monotonic):
         self.count, self.window, self.clock = count, window, clock
@@ -150,9 +103,10 @@ class NotyServer:
     endpoint_on(name) and quiet() are read on every request, so turning an endpoint
     off or "do not disturb" on takes effect at once, without a restart."""
 
-    def __init__(self, port, send, log, unavailable=(), host=HOST,
+    def __init__(self, port, send, log, endpoints=(), unavailable=(), host=HOST,
                  endpoint_on=lambda name: True, quiet=lambda: False):
         self.port, self.send, self.log, self.host = port, send, log, host
+        self.routes = {ep.path: (ep.name, ep.adapt) for ep in endpoints}
         self.endpoint_on, self.quiet = endpoint_on, quiet
         self.unavailable = tuple(unavailable)
         self.limit = RateLimit()
@@ -188,10 +142,12 @@ class NotyServer:
         self.recent.appendleft(entry)
         return entry
 
-    def receive(self, source, title, body, icon):
+    def receive(self, source, title, body, icon, announce=False):
         """A notification from an endpoint: shown, or silenced (endpoint off, do not
-        disturb). Returns None when shown, or the reason it wasn't."""
-        reason = ("endpoint_off" if not self.endpoint_on(source)
+        disturb). Returns None when shown, or the reason it wasn't. An announcement is
+        the endpoint's own message (connected, disconnected): it's shown even as the
+        endpoint is turned off."""
+        reason = ("endpoint_off" if not announce and not self.endpoint_on(source)
                   else "do_not_disturb" if self.quiet() else None)
         if reason:
             self._entry(source, title, muted=reason)
@@ -240,16 +196,16 @@ class NotyServer:
                 if not self._host_ok():
                     return self._answer(403, {"ok": False, "error": "use 127.0.0.1"})
                 if self.path != "/":
-                    return self._answer(404, {"ok": False, "error": "POST to " + ", ".join(ROUTES)})
-                self._answer(200, {"ok": True, "service": "noty", "endpoints": list(ROUTES)})
+                    return self._answer(404, {"ok": False, "error": "POST to " + ", ".join(service.routes)})
+                self._answer(200, {"ok": True, "service": "noty", "endpoints": list(service.routes)})
 
             def do_POST(self):
                 try:
                     if not self._host_ok():
                         raise Rejected(403, "use 127.0.0.1")
-                    route = ROUTES.get(self.path)
+                    route = service.routes.get(self.path)
                     if not route:
-                        raise Rejected(404, "POST to " + ", ".join(ROUTES))
+                        raise Rejected(404, "POST to " + ", ".join(service.routes))
                     source, adapter = route
                     ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
                     if ctype != "application/json":

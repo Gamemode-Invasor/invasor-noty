@@ -45,18 +45,33 @@ being filled with what you already had) is answered `ignored`:
 Noty ships Comety (`bin/comety`, x86-64 only): a small program that watches a Comet SQLite database and POSTs each new
 achievement to `/notify/comet`. Noty runs it for you:
 
-1. When a game starts, Noty waits 10 seconds (for Comet to create its files) and then looks for every `gameplay.db` in
+1. When a game starts, Noty waits 5 seconds (for Comet to create its files) and then looks for every `gameplay.db` in
    `~/.local/share/Steam/steamapps/compatdata/<AppId>/pfx/drive_c/users/steamuser/AppData/Local/comet/gameplay/` and
-   its subfolders. If there is none, it tries again 2 more times, 10 seconds apart.
+   its subfolders. If there is none, it tries again after 10 s and once more after 15 s, then gives up.
 2. For each one it starts `comety --url http://127.0.0.1:<port>/notify/comet --quiet <database>`. The tab lists them,
    one per line.
 3. It shows a notification, "Comet - <game>" / "Noty is connecting to <game>", with the game's logo (the one you set in
-   Steam, or else Steam's own). It follows Do not disturb and the Comet endpoint switch like any other.
-4. When the game ends, or the service stops, the comety programs stop. A game with no database does nothing.
+   Steam, or else Steam's own, or else Comet's own image, `assets/comety.png`). It follows Do not disturb like any other.
+4. When the game ends, the comety programs stop and a notification says "Noty disconnected from <game>". If the service
+   stops they stop too, silently. A game with no database does nothing.
 5. With the **Comet endpoint turned off**, none of this happens: no databases are searched and no comety runs (the other
    endpoints keep working). Turn it on while a game is running and it starts as if the game had just started.
 
 If Comety can't run, Noty logs it and carries on.
+
+### How the endpoints are built
+Each endpoint is a file of its own, `endpoint_<name>.py` (`endpoint_general.py`, `endpoint_comet.py`), with a class that
+extends `Endpoint` (`endpoints.py`) and is listed in `build()`:
+
+| | |
+|---|---|
+| `name`, `path`, `label`, `icon` | Its setting (`endpoint_<name>` in `module.json`), where to POST, how its messages call it, and its image (a file in `assets/`). |
+| `adapt(data)` | The payload as `(title, body, icon)`, or `None` to ignore it. |
+| `start(host)` / `stop()` | It's on (the service runs and its switch is on) / it's off or the service stops. |
+| `connected(host)` / `disconnected(host)` | The user turned it on / off. By default: a notification "<label> connected" / "<label> disconnected" with its image. Comet says nothing here: it speaks when it connects to a game. |
+| `details()` | Extra lines the tab shows under it. |
+
+Starting the service doesn't announce anything: only the user turning an endpoint on or off does.
 
 ### Do not disturb and turning endpoints off
 In the tab you can turn on **Do not disturb**, or turn off a single endpoint (e.g. Comet's, while scripts still
@@ -84,12 +99,16 @@ Needs an Invasor core with `author` support in module.json.
   `rarity`, `image_url_unlocked`…), no longer wrapped in an `event`. The cached local image (`image_path`) is gone.
 - Only an achievement unlocked in the last 5 minutes is shown (`unlock_time`); anything else is answered `ignored`.
 - New: Noty ships and runs **Comety** (`bin/comety`), which reads Comet's database and sends each new achievement to
-  `/notify/comet`. It starts for the running game (10 s after it starts, then two more tries, 10 s apart), one per
+  `/notify/comet`. It starts for the running game (5 s after it starts, then again after 10 s and after 15 s), one per
   `gameplay.db` found, and stops with the game. With the Comet endpoint off it doesn't start at all. The tab lists them, and a notification tells you it's connecting.
 - Comety: only a real unlock is audited (the trigger is replaced in existing databases), sent rows are always marked
   as done, invalid rows (HTTP 400/422) are dropped, a failed send stops the batch and retries in order, it backs off
   when the database is missing, and it exits if Noty dies or another Comety already watches the database.
-- The module zip now includes the files under `bin/` (needs the core's updated `pack_module.py`).
+- Each endpoint is a file of its own with a small interface (see *How the endpoints are built*): what to do when it starts
+  and stops, its image, and what it says when the user turns it on or off ("General connected"). Comet says it when it
+  connects to a game and when the game ends. Its notifications carry Comet's image (`assets/comety.png`) when the game
+  has no logo.
+- The module zip now includes the files under `bin/` and `assets/` (needs the core's updated `pack_module.py`).
 
 ### 0.2.0
 - First release.

@@ -9,6 +9,7 @@ interface Endpoint {
   path: string;
   url: string;
   on: boolean;
+  details: string[];
 }
 
 interface Status {
@@ -18,7 +19,6 @@ interface Status {
   url: string;
   error: string | null;
   dnd: boolean;
-  comety: { running: boolean; db: string }[];
   endpoints: Endpoint[];
 }
 
@@ -58,16 +58,12 @@ async function refresh(ctx: ModuleCtx) {
     statusEl.replaceChildren(
       ui.info(line),
       ...(st.running && st.dnd ? [ui.info("🔕 Do not disturb: requests are answered, but nothing is shown.")] : []),
-      ...(st.running
-        ? !st.endpoints.find((e) => e.name === "comet")?.on
-          ? [ui.info("○ off — Comety: the Comet endpoint is off")]
-          : st.comety.length
-          ? st.comety.map((c) => ui.info(`${c.running ? "●" : "○ not running —"} Comety: ${c.db}`))
-          : [ui.info("Comety: waiting for a game with Comet")]
-        : []),
     );
     endpointsEl.replaceChildren(
-      ...st.endpoints.map((e) => ui.info(`${e.on ? "●" : "○ off —"} ${e.name}: POST ${e.url}`)),
+      ...st.endpoints.flatMap((e) => [
+        ui.info(`${e.on ? "●" : "○ off —"} ${e.name}: POST ${e.url}`),
+        ...e.details.map((line) => ui.info(`      ${line}`)),
+      ]),
     );
     const list = await ctx.call<Recent[]>("recent");
     recentEl.replaceChildren(
