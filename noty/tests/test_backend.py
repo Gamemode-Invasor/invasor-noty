@@ -3,6 +3,7 @@ import json
 import logging
 import socket
 import sys
+import types
 import unittest
 from pathlib import Path
 
@@ -49,10 +50,12 @@ class FakeCtx:
     def __init__(self, port):
         self.settings = FakeSettings({**defaults(), "enabled": True, "port": port})
         self.log = logging.getLogger("test.noty")
-        self.shown = []
+        self.shown, self.bodies = [], []
+        self.game = types.SimpleNamespace(running=None)
 
     def notify(self, title, body="", icon=""):
         self.shown.append(title)
+        self.bodies.append(body)
 
 
 def load_backend():
@@ -63,7 +66,6 @@ def load_backend():
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
-    mod.COMETY_BIN = HERE / "bin" / "not-here"  # tests never run the real one
     return mod
 
 
@@ -111,31 +113,116 @@ class Backend(unittest.TestCase):
         ctx.settings.change("port", free_port())
         self.assertIsNot(b.server, server)  # the port does restart it
 
-    def test_comety_runs_against_the_comet_endpoint(self):
+    def started(self, running):
+        """A backend with a game running, a (mocked) comety, and the databases that were found."""
         from unittest import mock
         b = load_backend()
-        b.COMETY_BIN = HERE / "bin" / "comety"
-        b.COMETY_DB = "/tmp/some.db"
-        with mock.patch.object(b.os, "chmod") as chmod, mock.patch.object(b.subprocess, "Popen") as popen:
-            popen.return_value.poll.return_value = None
-            b.setup(FakeCtx(free_port()))
-            port = b.status()["port"]
-            self.assertEqual(popen.call_args.args[0],
-                             [str(HERE / "bin" / "comety"), "--url", f"http://127.0.0.1:{port}/notify/comet",
-                              "--quiet", "/tmp/some.db"])
-            chmod.assert_called_once_with(HERE / "bin" / "comety", 0o755)
-            self.assertEqual(b.status()["comety"], {"running": True, "db": "/tmp/some.db"})
-            b.teardown()
-            popen.return_value.terminate.assert_called_once()
-            self.assertFalse(b.status()["comety"]["running"])
+        b.GAME_DELAY = b.GAME_RETRY = b.GAME_POLL = 0.01
+        ctx = FakeCtx(free_port())
+        ctx.game.running = running
+        b.games = mock.Mock(gameplay_dbs=mock.Mock(return_value=["/a/gameplay.db", "/b/gameplay.db"]),
+                            logo_files=mock.Mock(return_value=[]))
+        patch = mock.patch.object(b.subprocess, "Popen")
+        popen = patch.start()
+        self.addCleanup(patch.stop)
+        popen.return_value.poll.return_value = None
+        chmod = mock.patch.object(b.os, "chmod").start()
+        self.addCleanup(mock.patch.stopall)
+        return b, ctx, popen, chmod
+
+    def wait_for(self, cond):
+        import time
+        for _ in range(300):
+            if cond():
+                return
+            time.sleep(0.01)
+        self.fail("timed out")
+
+    def test_comety_runs_for_each_database_of_the_game_being_played(self):
+        b, ctx, popen, chmod = self.started({"appid": "123", "name": "Lil Gator Game"})
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: popen.call_count == 2)
+        port = b.status()["port"]
+        url = f"http://127.0.0.1:{port}/notify/comet"
+        self.assertEqual([c.args[0][1:] for c in popen.call_args_list],
+                         [["--url", url, "--quiet", "/a/gameplay.db"], ["--url", url, "--quiet", "/b/gameplay.db"]])
+        chmod.assert_called_with(b.COMETY_BIN, 0o755)
+        b.games.gameplay_dbs.assert_called_with("123")
+        self.assertEqual(b.status()["comety"],
+                         [{"db": "/a/gameplay.db", "running": True}, {"db": "/b/gameplay.db", "running": True}])
+        self.assertEqual(ctx.shown, ["Comet - Lil Gator Game"])
+        self.assertEqual(ctx.bodies, ["Noty is connecting to Lil Gator Game"])
+        ctx.game.running = None  # the game ends: comety stops
+        self.wait_for(lambda: b.status()["comety"] == [])
+        self.assertEqual(popen.return_value.terminate.call_count, 2)
+
+    def test_databases_that_appear_later_are_found(self):
+        b, ctx, popen, _ = self.started({"appid": "123", "name": "TOEM"})
+        b.games.gameplay_dbs.return_value = []
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: b.games.gameplay_dbs.call_count >= 2)
+        popen.assert_not_called()
+        b.games.gameplay_dbs.return_value = ["/a/gameplay.db"]
+        self.wait_for(lambda: popen.call_count == 1)
+        self.assertEqual(ctx.shown, ["Comet - TOEM"])
+
+    def test_it_gives_up_after_the_retries(self):
+        b, ctx, popen, _ = self.started({"appid": "123", "name": "TOEM"})
+        b.games.gameplay_dbs.return_value = []
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: b.games.gameplay_dbs.call_count == 1 + b.RETRIES)
+        import time
+        time.sleep(0.2)
+        self.assertEqual(b.games.gameplay_dbs.call_count, 1 + b.RETRIES)
+        popen.assert_not_called()
+
+    def test_endpoint_off_no_comety_and_back_on_it_starts(self):
+        b, ctx, popen, _ = self.started({"appid": "123", "name": "TOEM"})
+        ctx.settings.change("endpoint_comet", False)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        import time
+        time.sleep(0.2)
+        popen.assert_not_called()
+        b.games.gameplay_dbs.assert_not_called()
+        self.assertEqual((b.status()["comety"], ctx.shown), ([], []))
+        self.assertTrue(b.test())  # the rest of Noty works
+        ctx.settings.change("endpoint_comet", True)  # the game is still running
+        self.wait_for(lambda: popen.call_count == 2)
+        ctx.settings.change("endpoint_comet", False)  # and off again: they stop
+        self.wait_for(lambda: b.status()["comety"] == [])
+        self.assertEqual(popen.return_value.terminate.call_count, 2)
+
+    def test_no_game_no_comety(self):
+        b, ctx, popen, _ = self.started(None)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        import time
+        time.sleep(0.1)
+        popen.assert_not_called()
+        self.assertEqual((b.status()["comety"], ctx.shown), ([], []))
+
+    def test_a_game_without_databases_shows_nothing(self):
+        b, ctx, popen, _ = self.started({"appid": "5", "name": "x"})
+        b.games.gameplay_dbs.return_value = []
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: b.games.gameplay_dbs.call_count >= 2)
+        popen.assert_not_called()
+        self.assertEqual(ctx.shown, [])
 
     def test_comety_failing_doesnt_stop_the_service(self):
-        b = load_backend()  # the binary is missing: chmod fails
-        b.setup(FakeCtx(free_port()))
+        b, ctx, popen, _ = self.started({"appid": "5", "name": "x"})
+        popen.side_effect = FileNotFoundError(2, "No such file")
+        b.setup(ctx)
         self.addCleanup(b.teardown)
+        self.wait_for(lambda: popen.called)
         st = b.status()
         self.assertTrue(st["running"])
-        self.assertFalse(st["comety"]["running"])
+        self.assertFalse(any(c["running"] for c in st["comety"]))
 
     def test_every_endpoint_has_its_setting(self):
         b = load_backend()

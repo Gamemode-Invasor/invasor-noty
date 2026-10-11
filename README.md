@@ -30,7 +30,9 @@ Each program can send its own format to its own endpoint; Noty turns it into a n
 | `/notify/comet` | [Comet](https://github.com/imLinguin/comet) (GOG) | Comet's unlocked achievement, sent as a flat JSON object. |
 
 For Comet, the notification takes `name` as the title, `description` (and the `rarity`) as the body, and
-`image_url_unlocked` as the icon. Other fields are ignored, so new ones in Comet don't break anything:
+`image_url_unlocked` as the icon. Other fields are ignored, so new ones in Comet don't break anything. Only an
+achievement unlocked in the last 5 minutes (`unlock_time`) is shown: anything else (a rarity update, or a new database
+being filled with what you already had) is answered `ignored`:
 
 ```json
 {"id": 54837606302766106, "key": "PET_DOG_MECK", "name": "…", "description": "…",
@@ -40,10 +42,21 @@ For Comet, the notification takes `name` as the title, `description` (and the `r
 ```
 
 ### Comety
-Noty ships Comety (`bin/comety`, x86-64 only): a small program that watches
-Comet's SQLite database and POSTs each new achievement to `/notify/comet`. Noty starts it with the service
-(`comety --url http://127.0.0.1:<port>/notify/comet --quiet <database>`) and stops it with it. The database is fixed
-for now (`COMETY_DB` in `backend.py`). If Comety can't run, Noty logs it and carries on.
+Noty ships Comety (`bin/comety`, x86-64 only): a small program that watches a Comet SQLite database and POSTs each new
+achievement to `/notify/comet`. Noty runs it for you:
+
+1. When a game starts, Noty waits 10 seconds (for Comet to create its files) and then looks for every `gameplay.db` in
+   `~/.local/share/Steam/steamapps/compatdata/<AppId>/pfx/drive_c/users/steamuser/AppData/Local/comet/gameplay/` and
+   its subfolders. If there is none, it tries again 2 more times, 10 seconds apart.
+2. For each one it starts `comety --url http://127.0.0.1:<port>/notify/comet --quiet <database>`. The tab lists them,
+   one per line.
+3. It shows a notification, "Comet - <game>" / "Noty is connecting to <game>", with the game's logo (the one you set in
+   Steam, or else Steam's own). It follows Do not disturb and the Comet endpoint switch like any other.
+4. When the game ends, or the service stops, the comety programs stop. A game with no database does nothing.
+5. With the **Comet endpoint turned off**, none of this happens: no databases are searched and no comety runs (the other
+   endpoints keep working). Turn it on while a game is running and it starts as if the game had just started.
+
+If Comety can't run, Noty logs it and carries on.
 
 ### Do not disturb and turning endpoints off
 In the tab you can turn on **Do not disturb**, or turn off a single endpoint (e.g. Comet's, while scripts still
@@ -63,6 +76,23 @@ python3 ../invasor/tools/install_module.py noty    # or install that zip from �
 ```
 
 Needs an Invasor core with `author` support in module.json.
+
+## Changes
+
+### 0.3.0
+- `/notify/comet` takes Comet's new payload: the unlocked achievement as a flat JSON object (`name`, `description`,
+  `rarity`, `image_url_unlocked`…), no longer wrapped in an `event`. The cached local image (`image_path`) is gone.
+- Only an achievement unlocked in the last 5 minutes is shown (`unlock_time`); anything else is answered `ignored`.
+- New: Noty ships and runs **Comety** (`bin/comety`), which reads Comet's database and sends each new achievement to
+  `/notify/comet`. It starts for the running game (10 s after it starts, then two more tries, 10 s apart), one per
+  `gameplay.db` found, and stops with the game. With the Comet endpoint off it doesn't start at all. The tab lists them, and a notification tells you it's connecting.
+- Comety: only a real unlock is audited (the trigger is replaced in existing databases), sent rows are always marked
+  as done, invalid rows (HTTP 400/422) are dropped, a failed send stops the batch and retries in order, it backs off
+  when the database is missing, and it exits if Noty dies or another Comety already watches the database.
+- The module zip now includes the files under `bin/` (needs the core's updated `pack_module.py`).
+
+### 0.2.0
+- First release.
 
 ## License
 [GNU General Public License v3.0 or later](LICENSE) (GPL-3.0-or-later).

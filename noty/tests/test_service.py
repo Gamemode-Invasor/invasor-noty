@@ -4,6 +4,7 @@ import logging
 import socket
 import struct
 import tempfile
+import time
 import unittest
 import zlib
 from pathlib import Path
@@ -151,9 +152,13 @@ class Service(Server):
         self.assertEqual([t for t, _, _ in self.sent], ["back", "test", "test"])
 
 
+def now_utc(ago=0):
+    return time.strftime("%Y-%m-%dT%H:%M:%S+0000", time.gmtime(time.time() - ago))
+
+
 def comet_payload(**fields):
     p = {"id": 54837606302766106, "key": "PET_DOG_MECK", "name": "¿Lo puedo acariciar?",
-         "description": "Acaricia una mascota.", "visible_while_locked": 1, "unlock_time": "2026-07-31T01:48:51+0000",
+         "description": "Acaricia una mascota.", "visible_while_locked": 1, "unlock_time": now_utc(),
          "image_url_locked": "https://images.gog.com/d5848_gac_60.jpg",
          "image_url_unlocked": "https://images.gog.com/9fa16_gac_60.jpg", "changed": 0,
          "rarity": 70.599998474121094, "rarity_level_description": "Common", "rarity_level_slug": "common"}
@@ -180,6 +185,14 @@ class Comet(Server):
         self.post(comet_payload(image_url_unlocked="http://insecure.example/a.jpg"))
         self.post(comet_payload(image_url_unlocked=None))
         self.assertEqual([s[2] for s in self.sent], ["", ""])
+
+    def test_only_a_recent_unlock_is_shown(self):
+        ignored = (200, {"ok": True, "shown": False, "reason": "ignored"})
+        for unlock_time in (None, "", "garbage", now_utc(3600), "2026-07-31T01:48:51+0000"):
+            with self.subTest(unlock_time=unlock_time):
+                self.assertEqual(self.post(comet_payload(unlock_time=unlock_time)), ignored)
+        self.assertEqual((self.sent, list(self.s.recent)), ([], []))
+        self.assertEqual(self.post(comet_payload(unlock_time=now_utc(60)))[0], 200)
 
     def test_an_achievement_needs_a_name(self):
         for bad in ({}, {"event": "achievement_unlocked"}, comet_payload(name=5)):

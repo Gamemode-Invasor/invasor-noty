@@ -23,6 +23,7 @@ import collections
 import json
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -30,6 +31,7 @@ HOST = "127.0.0.1"
 MAX_BODY = 768 << 10  # room for an embedded image (data:…) of up to 512 KB
 MAX_ICON_FILE = 384 << 10
 RATE, RATE_WINDOW = 5, 10.0
+MAX_UNLOCK_AGE = 300  # seconds: an older unlock is Comet syncing what you had, not something new
 IMAGE_TYPES = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif", ".webp": "webp"}
 MAGIC = {"png": b"\x89PNG", "jpeg": b"\xff\xd8\xff", "gif": b"GIF8", "webp": b"RIFF"}
 
@@ -89,11 +91,24 @@ def native(data):
     return data.get("title"), data.get("body", ""), data.get("icon", "")
 
 
+def just_unlocked(unlock_time):
+    """Whether Comet's unlock_time ("2026-07-31T01:48:51+0000") is recent. Comety sends every
+    update of an achievement, including a new database being filled with what you already had."""
+    try:
+        when = datetime.strptime(unlock_time, "%Y-%m-%dT%H:%M:%S%z")
+    except (TypeError, ValueError):
+        return False
+    return (datetime.now(timezone.utc) - when).total_seconds() <= MAX_UNLOCK_AGE
+
+
 def comet(data):
     """/notify/comet: an unlocked achievement, as Comet sends it (the achievement itself, flat).
-    Lenient: Comet may add fields at any time."""
+    Lenient: Comet may add fields at any time. Only a recent unlock is shown; any other
+    update (not unlocked, unlocked long ago) is ignored (None)."""
     if not isinstance(data.get("name"), str):
         raise Rejected(400, "name is required")
+    if not just_unlocked(data.get("unlock_time")):
+        return None
     body = data.get("description")
     body = body if isinstance(body, str) else ""
     rarity = data.get("rarity")
