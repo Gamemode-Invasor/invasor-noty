@@ -27,24 +27,29 @@ Each program can send its own format to its own endpoint; Noty turns it into a n
 | Endpoint | For | Payload |
 |---|---|---|
 | `/notify` | general: your scripts and any program | `{"title", "body", "icon"}` as above. Unknown fields are an error. |
-| `/notify/comet` | [Comet](https://github.com/imLinguin/comet) (GOG) | Comet's events. `achievement_unlocked` is shown; other events are ignored. |
+| `/notify/comet` | [Comet](https://github.com/imLinguin/comet) (GOG) | Comet's unlocked achievement, sent as a flat JSON object. |
 
-For Comet, the notification takes `achievement.name` as the title, `achievement.description` (and the rarity) as the
-body, and `achievement.image_path` (a cached local image) or else `achievement.image_url` as the icon. Other fields
-are ignored, so new ones in Comet don't break anything:
+For Comet, the notification takes `name` as the title, `description` (and the `rarity`) as the body, and
+`image_url_unlocked` as the icon. Other fields are ignored, so new ones in Comet don't break anything:
 
 ```json
-{"event": "achievement_unlocked", "version": 1, "game": {"id": "1234567890", "name": "…"},
- "achievement": {"name": "…", "description": "…", "rarity": 22.6,
-                 "image_url": "https://images.gog.com/….jpg", "image_path": "/path/to/cached.jpg"}}
+{"id": 54837606302766106, "key": "PET_DOG_MECK", "name": "…", "description": "…",
+ "visible_while_locked": 1, "unlock_time": "2026-07-31T01:48:51+0000",
+ "image_url_locked": "https://images.gog.com/….jpg", "image_url_unlocked": "https://images.gog.com/….jpg",
+ "changed": 0, "rarity": 70.6, "rarity_level_description": "Common", "rarity_level_slug": "common"}
 ```
+
+### Comety
+Noty ships Comety (`bin/comety`, x86-64 only): a small program that watches
+Comet's SQLite database and POSTs each new achievement to `/notify/comet`. Noty starts it with the service
+(`comety --url http://127.0.0.1:<port>/notify/comet --quiet <database>`) and stops it with it. The database is fixed
+for now (`COMETY_DB` in `backend.py`). If Comety can't run, Noty logs it and carries on.
 
 ### Do not disturb and turning endpoints off
 In the tab you can turn on **Do not disturb**, or turn off a single endpoint (e.g. Comet's, while scripts still
 notify). Requests are still received and checked, and answered `200 {"ok": true, "shown": false, "reason": …}` with
 `"do_not_disturb"` or `"endpoint_off"`, so senders don't log errors; nothing is shown and nothing is kept for later.
-They're listed in the tab's last notifications with 🔕. An event Noty doesn't show (e.g. a Comet event other than an
-achievement) gets `"reason": "ignored"`. The test button always shows its notification.
+They're listed in the tab's last notifications with 🔕. An event an adapter doesn't show gets `"reason": "ignored"`. The test button always shows its notification.
 
 Notifications follow Steam's own setting for achievement notifications. They're shown through Invasor's core
 (`ctx.notify`); if a Steam update ever changes how Steam shows them, Noty answers 503 and nothing else is affected.

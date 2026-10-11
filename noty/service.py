@@ -4,7 +4,7 @@ Pure stdlib, no Invasor imports: tested on its own (tests/test_service.py). It l
 on 127.0.0.1 only, so only programs on this machine can use it.
 
     POST /notify         {"title": "…", "body": "…", "icon": "https://…" | "data:image/…" | "/path/to/image.png"}
-    POST /notify/comet   Comet's (GOG) event payload: {"event": "achievement_unlocked", "achievement": {…}}
+    POST /notify/comet   Comet's (GOG) unlocked achievement: {"name": "…", "description": "…", …}
     GET  /               {"ok": true, "service": "noty", "endpoints": [...]}
 
 Each endpoint has an adapter (ENDPOINTS) that turns its payload into (title, body, icon),
@@ -90,26 +90,18 @@ def native(data):
 
 
 def comet(data):
-    """/notify/comet: Comet's events. Lenient: Comet may add fields at any time.
-    Only unlocked achievements are shown; other events are ignored (None)."""
-    if data.get("event") != "achievement_unlocked":
-        return None
-    a = data.get("achievement")
-    if not isinstance(a, dict) or not isinstance(a.get("name"), str):
-        raise Rejected(400, "achievement.name is required")
-    body = a.get("description")
+    """/notify/comet: an unlocked achievement, as Comet sends it (the achievement itself, flat).
+    Lenient: Comet may add fields at any time."""
+    if not isinstance(data.get("name"), str):
+        raise Rejected(400, "name is required")
+    body = data.get("description")
     body = body if isinstance(body, str) else ""
-    rarity = a.get("rarity")
+    rarity = data.get("rarity")
     if isinstance(rarity, (int, float)) and not isinstance(rarity, bool):
         body = f"{body} · {rarity:.1f}%" if body else f"{rarity:.1f}%"
-    path, url = a.get("image_path"), a.get("image_url")
-    if isinstance(path, str) and Path(path).is_absolute() and Path(path).is_file():
-        icon = path  # cached by Comet: works offline
-    elif isinstance(url, str) and url.startswith("https://"):
-        icon = url
-    else:
-        icon = ""
-    return a["name"], body, icon
+    url = data.get("image_url_unlocked")
+    icon = url if isinstance(url, str) and url.startswith("https://") else ""
+    return data["name"], body, icon
 
 
 # name -> (path, adapter). The name is the endpoint's setting: endpoint_<name>.

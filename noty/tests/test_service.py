@@ -127,14 +127,14 @@ class Service(Server):
                          (200, {"ok": True, "shown": False, "reason": "endpoint_off"}))
         self.assertEqual(self.sent, [])
         self.assertEqual({k: self.s.recent[0][k] for k in ("source", "title", "muted")},
-                         {"source": "comet", "title": "Un salto brillante", "muted": "endpoint_off"})
+                         {"source": "comet", "title": "¿Lo puedo acariciar?", "muted": "endpoint_off"})
         self.assertEqual(self.request(body={"title": "Still here"})[1]["shown"], True)  # the others go on
         self.assertEqual(self.sent, [("Still here", "", "")])
 
     def test_a_bad_request_is_still_400_when_silenced(self):
         self.on["general"], self.dnd = False, True
         self.assertEqual(self.request(body={"title": "x", "extra": 1})[0], 400)
-        self.assertEqual(self.request(path="/notify/comet", body={"event": "achievement_unlocked"})[0], 400)
+        self.assertEqual(self.request(path="/notify/comet", body={})[0], 400)
 
     def test_do_not_disturb(self):
         self.dnd = True
@@ -151,12 +151,14 @@ class Service(Server):
         self.assertEqual([t for t, _, _ in self.sent], ["back", "test", "test"])
 
 
-def comet_payload(**achievement):
-    a = {"key": "CLOSE_UP_DANCER", "name": "Un salto brillante", "description": "Haz un primer plano de una bailarina.",
-         "rarity": 22.600000381469727, "image_url": "https://images.gog.com/e8a0_gac_60.jpg"}
-    a.update(achievement)
-    return {"event": "achievement_unlocked", "version": 1, "timestamp": "2026-10-02T10:00:00Z",
-            "game": {"id": "1234567890", "name": "Lil Gator Game"}, "achievement": a}
+def comet_payload(**fields):
+    p = {"id": 54837606302766106, "key": "PET_DOG_MECK", "name": "¿Lo puedo acariciar?",
+         "description": "Acaricia una mascota.", "visible_while_locked": 1, "unlock_time": "2026-07-31T01:48:51+0000",
+         "image_url_locked": "https://images.gog.com/d5848_gac_60.jpg",
+         "image_url_unlocked": "https://images.gog.com/9fa16_gac_60.jpg", "changed": 0,
+         "rarity": 70.599998474121094, "rarity_level_description": "Common", "rarity_level_slug": "common"}
+    p.update(fields)
+    return p
 
 
 class Comet(Server):
@@ -165,36 +167,22 @@ class Comet(Server):
 
     def test_an_unlocked_achievement_is_shown(self):
         self.assertEqual(self.post(comet_payload()), (200, {"ok": True, "shown": True}))
-        self.assertEqual(self.sent, [("Un salto brillante", "Haz un primer plano de una bailarina. · 22.6%",
-                                      "https://images.gog.com/e8a0_gac_60.jpg")])
+        self.assertEqual(self.sent, [("¿Lo puedo acariciar?", "Acaricia una mascota. · 70.6%",
+                                      "https://images.gog.com/9fa16_gac_60.jpg")])
         self.assertEqual(self.s.recent[0]["source"], "comet")
 
     def test_extra_fields_are_fine(self):
         payload = comet_payload(new_field=[1, 2], rarity=None, description=None)
-        payload["something_new"] = {"x": 1}
         self.assertEqual(self.post(payload)[0], 200)
-        self.assertEqual(self.sent[0][:2], ("Un salto brillante", ""))
+        self.assertEqual(self.sent[0][:2], ("¿Lo puedo acariciar?", ""))
 
-    def test_the_cached_image_wins_over_the_url(self):
-        with tempfile.TemporaryDirectory() as d:
-            img = Path(d) / "a.png"
-            img.write_bytes(png_bytes())
-            self.assertEqual(self.post(comet_payload(image_path=str(img)))[0], 200)
-            self.assertTrue(self.sent[0][2].startswith("data:image/png;base64,"))
-            # missing or relative: back to the URL; a plain http:// URL isn't used
-            self.post(comet_payload(image_path=str(Path(d) / "gone.png")))
-            self.post(comet_payload(image_path="a.png", image_url="http://insecure.example/a.png"))
-        self.assertEqual([s[2] for s in self.sent[1:]], ["https://images.gog.com/e8a0_gac_60.jpg", ""])
-
-    def test_other_events_are_ignored(self):
-        self.assertEqual(self.post({"event": "leaderboard_updated", "leaderboard": {}}),
-                         (200, {"ok": True, "shown": False, "reason": "ignored"}))
-        self.assertEqual(self.post({}), (200, {"ok": True, "shown": False, "reason": "ignored"}))
-        self.assertEqual((self.sent, list(self.s.recent)), ([], []))
+    def test_only_the_unlocked_https_image_is_used(self):
+        self.post(comet_payload(image_url_unlocked="http://insecure.example/a.jpg"))
+        self.post(comet_payload(image_url_unlocked=None))
+        self.assertEqual([s[2] for s in self.sent], ["", ""])
 
     def test_an_achievement_needs_a_name(self):
-        for bad in ({"event": "achievement_unlocked"}, {"event": "achievement_unlocked", "achievement": "x"},
-                    comet_payload(name=5)):
+        for bad in ({}, {"event": "achievement_unlocked"}, comet_payload(name=5)):
             with self.subTest(bad=bad):
                 self.assertEqual(self.post(bad)[0], 400)
         self.assertEqual(self.post(comet_payload(name=" "))[0], 400)  # refused by send

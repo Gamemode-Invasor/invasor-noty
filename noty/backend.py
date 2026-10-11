@@ -6,20 +6,56 @@ of their own format (/notify/comet…, service.py), and Invasor's core shows it
 is affected; if the port is taken, the tab says so. Each endpoint can be turned off, and
 "do not disturb" silences them all; both are read live, without restarting the service.
 """
+import os
+import subprocess
 import threading
+from pathlib import Path
 
 from . import service
+
+# Comety (bin/comety) watches Comet's database and POSTs each new achievement to /notify/comet.
+COMETY_BIN = Path(__file__).resolve().parent / "bin" / "comety"
+COMETY_DB = "/home/deck/Proyectos/comety/gameplay.db"  # example, for now
 
 ctx = None
 server = None
 error = None
+comety = None
 _lock = threading.Lock()
+
+
+def _stop_comety():
+    global comety
+    p, comety = comety, None
+    if not p:
+        return
+    p.terminate()
+    try:
+        p.wait(5)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+
+
+def _start_comety(port):
+    """Run comety against the same URL as /notify/comet. Never raises."""
+    global comety
+    try:
+        os.chmod(COMETY_BIN, 0o755)  # the installer doesn't keep the executable bit
+        comety = subprocess.Popen(
+            [str(COMETY_BIN), "--url", f"http://127.0.0.1:{port}/notify/comet", "--quiet", COMETY_DB],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        ctx.log.warning("can't run comety: %s", e.strerror or e)
+        return
+    ctx.log.info("comety watching %s", COMETY_DB)
 
 
 def _start():
     """(Re)start the service with the current settings. Never raises."""
     global server, error
     with _lock:
+        _stop_comety()
         if server:
             server.stop()
             server = None
@@ -38,6 +74,7 @@ def _start():
             return
         server = s
         ctx.log.info("listening on http://127.0.0.1:%s/notify", port)
+        _start_comety(s.port)
 
 
 def setup(context):
@@ -51,6 +88,7 @@ def setup(context):
 def teardown():
     global server
     with _lock:
+        _stop_comety()
         if server:
             server.stop()
             server = None
@@ -62,7 +100,8 @@ def status():
     endpoints = [{"name": name, "path": path, "url": base + path, "on": ctx.settings.get(f"endpoint_{name}")}
                  for name, (path, _) in service.ENDPOINTS.items()]
     return {"enabled": ctx.settings.get("enabled"), "running": server is not None, "port": port,
-            "url": base + "/notify", "error": error, "dnd": ctx.settings.get("dnd"), "endpoints": endpoints}
+            "url": base + "/notify", "error": error,
+            "comety": {"running": comety is not None and comety.poll() is None, "db": COMETY_DB}, "dnd": ctx.settings.get("dnd"), "endpoints": endpoints}
 
 
 def recent():

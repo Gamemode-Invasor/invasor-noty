@@ -63,6 +63,7 @@ def load_backend():
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
+    mod.COMETY_BIN = HERE / "bin" / "not-here"  # tests never run the real one
     return mod
 
 
@@ -109,6 +110,32 @@ class Backend(unittest.TestCase):
         self.assertEqual(ctx.shown, ["Noty", "x"])
         ctx.settings.change("port", free_port())
         self.assertIsNot(b.server, server)  # the port does restart it
+
+    def test_comety_runs_against_the_comet_endpoint(self):
+        from unittest import mock
+        b = load_backend()
+        b.COMETY_BIN = HERE / "bin" / "comety"
+        b.COMETY_DB = "/tmp/some.db"
+        with mock.patch.object(b.os, "chmod") as chmod, mock.patch.object(b.subprocess, "Popen") as popen:
+            popen.return_value.poll.return_value = None
+            b.setup(FakeCtx(free_port()))
+            port = b.status()["port"]
+            self.assertEqual(popen.call_args.args[0],
+                             [str(HERE / "bin" / "comety"), "--url", f"http://127.0.0.1:{port}/notify/comet",
+                              "--quiet", "/tmp/some.db"])
+            chmod.assert_called_once_with(HERE / "bin" / "comety", 0o755)
+            self.assertEqual(b.status()["comety"], {"running": True, "db": "/tmp/some.db"})
+            b.teardown()
+            popen.return_value.terminate.assert_called_once()
+            self.assertFalse(b.status()["comety"]["running"])
+
+    def test_comety_failing_doesnt_stop_the_service(self):
+        b = load_backend()  # the binary is missing: chmod fails
+        b.setup(FakeCtx(free_port()))
+        self.addCleanup(b.teardown)
+        st = b.status()
+        self.assertTrue(st["running"])
+        self.assertFalse(st["comety"]["running"])
 
     def test_every_endpoint_has_its_setting(self):
         b = load_backend()
