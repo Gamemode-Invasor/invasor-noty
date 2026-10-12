@@ -30,7 +30,7 @@ class Host:
     def port(self):
         return server.port if server else None
 
-    def announce(self, endpoint, title, body="", icon=""):
+    def announce(self, endpoint, title, body="", icon="", sound=""):
         """A message of the endpoint itself, with its image unless there's a better icon (or
         Noty's default one, if the endpoint has none). It follows "do not disturb" and the
         rate limit; it doesn't need the endpoint to be on."""
@@ -38,7 +38,7 @@ class Host:
         if not s:
             return
         try:
-            s.receive(endpoint.name, title[:64], body[:256], icon or endpoint.icon_or_default(), announce=True)
+            s.receive(endpoint.name, title[:64], body[:256], icon or endpoint.icon_or_default(), announce=True, sound=sound)
         except service.Rejected as e:
             self.log.warning("%s: message not shown: %s", endpoint.name, e)
 

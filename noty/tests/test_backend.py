@@ -50,13 +50,14 @@ class FakeCtx:
     def __init__(self, port):
         self.settings = FakeSettings({**defaults(), "enabled": True, "port": port})
         self.log = logging.getLogger("test.noty")
-        self.shown, self.bodies, self.icons = [], [], []
+        self.shown, self.bodies, self.icons, self.sounds = [], [], [], []
         self.game = types.SimpleNamespace(running=None)
 
-    def notify(self, title, body="", icon=""):
+    def notify(self, title, body="", icon="", sound=""):
         self.shown.append(title)
         self.bodies.append(body)
         self.icons.append(icon)
+        self.sounds.append(sound)
 
 
 class Backend(unittest.TestCase):
@@ -216,6 +217,17 @@ class Backend(unittest.TestCase):
         self.assertNotEqual(b.eps["comet"].icon_data(), endpoints.default_icon())
         self.assertTrue(b.test())
         self.assertEqual(ctx.icons[-1], endpoints.default_icon())
+
+    def test_a_sound_reaches_the_core(self):
+        b, comet, ctx, popen, _ = self.started(None)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        for body in ({"title": "a"}, {"title": "b", "sound": "online"}):
+            c = http.client.HTTPConnection("127.0.0.1", b.status()["port"], timeout=5)
+            c.request("POST", "/notify", json.dumps(body), {"Content-Type": "application/json"})
+            self.assertEqual(c.getresponse().status, 200)
+            c.close()
+        self.assertEqual(ctx.sounds, ["", "online"])  # no sound: Steam decides
 
     def test_no_game_no_comety(self):
         b, comet, ctx, popen, _ = self.started(None)

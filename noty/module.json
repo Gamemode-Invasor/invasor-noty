@@ -42,7 +42,7 @@
           "type": "toggle",
           "label": "General — /notify",
           "default": true,
-          "hint": "Noty's own format: {\"title\", \"body\", \"icon\"}. Off: requests are answered, but nothing is shown."
+          "hint": "Noty's own format: {\"title\", \"body\", \"icon\", \"sound\"}. Off: requests are answered, but nothing is shown."
         },
         {
           "key": "endpoint_comet",

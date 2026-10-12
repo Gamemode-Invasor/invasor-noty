@@ -29,7 +29,7 @@ class Endpoint:
     icon = None   # file in assets/ with its image: used by its own messages
 
     def adapt(self, data):
-        """The payload (a dict) as (title, body, icon), or None to ignore it. Rejected(400, …)
+        """The payload (a dict) as (title, body, icon[, sound]), or None to ignore it. Rejected(400, …)
         if it's wrong."""
         raise NotImplementedError
 
