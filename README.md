@@ -42,7 +42,7 @@ being filled with what you already had) is answered `ignored`:
 ```
 
 ### Comety
-Noty ships Comety (`bin/comety`, x86-64 only): a small program that watches a Comet SQLite database and POSTs each new
+Noty ships Comety (`bin/comety`, x86-64 only; its source is in [`comety/`](comety/)): a small program that watches a Comet SQLite database and POSTs each new
 achievement to `/notify/comet`. Noty runs it for you:
 
 1. When a game starts, Noty waits 5 seconds (for Comet to create its files) and then looks for every `gameplay.db` in
