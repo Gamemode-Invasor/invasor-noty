@@ -58,7 +58,7 @@ class Comet(Endpoint):
         self._thread = None
 
     def adapt(self, data):
-        """Lenient: Comet may add fields at any time. Only a recent unlock is shown; any other
+        """Lenient: Comet may add fields at any time. Always the trophy sound. Only a recent unlock is shown; any other
         update (not unlocked, unlocked long ago) is ignored (None)."""
         if not isinstance(data.get("name"), str):
             raise service.Rejected(400, "name is required")
@@ -70,7 +70,7 @@ class Comet(Endpoint):
         if isinstance(rarity, (int, float)) and not isinstance(rarity, bool):
             body = f"{body} · {rarity:.1f}%" if body else f"{rarity:.1f}%"
         url = data.get("image_url_unlocked")
-        return data["name"], body, url if isinstance(url, str) and url.startswith("https://") else ""
+        return data["name"], body, url if isinstance(url, str) and url.startswith("https://") else "", "trophy"
 
     def start(self, host):
         if self._thread:
@@ -142,7 +142,7 @@ class Comet(Endpoint):
             self._run(dbs)
             if first:
                 self.game = (appid, name)
-                self.host.announce(self, f"Comet - {name}", f"Noty is connecting to {name}", logo(appid))
+                self.host.announce(self, f"Comet - {name}", f"Noty is connecting to {name}", logo(appid), sound="online")
 
     def _leave(self):
         """The game is over (or the endpoint is turned off): stop its comety and say so."""
@@ -151,7 +151,7 @@ class Comet(Endpoint):
             self._stop_comety()
             self.comety.clear()
             if game:
-                self.host.announce(self, f"Comet - {game[1]}", f"Noty disconnected from {game[1]}", logo(game[0]))
+                self.host.announce(self, f"Comet - {game[1]}", f"Noty disconnected from {game[1]}", logo(game[0]), sound="mention")
 
     def _watch(self):
         """Follow the running game and look for its databases (see GAME_WAITS). Never raises."""

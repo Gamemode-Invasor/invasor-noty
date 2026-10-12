@@ -6,7 +6,7 @@ on 127.0.0.1 only, so only programs on this machine can use it.
     POST <path>   an endpoint's payload (endpoint_*.py: /notify, /notify/comet…)
     GET  /        {"ok": true, "service": "noty", "endpoints": [...]}
 
-Each endpoint (endpoints.py) has an adapt() that turns its payload into (title, body, icon),
+Each endpoint (endpoints.py) has an adapt() that turns its payload into (title, body, icon[, sound]),
 or None for an event that isn't shown. An endpoint can be turned off, and "do not
 disturb" silences them all: the request is still checked and answered (200, shown:
 false), but nothing is shown.
@@ -30,6 +30,7 @@ MAX_BODY = 768 << 10  # room for an embedded image (data:…) of up to 512 KB
 MAX_ICON_FILE = 384 << 10
 RATE, RATE_WINDOW = 5, 10.0
 IMAGE_TYPES = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif", ".webp": "webp"}
+SOUNDS = ("trophy", "message", "toast", "chat", "mention", "friend", "online", "ingame", "none")
 MAGIC = {"png": b"\x89PNG", "jpeg": b"\xff\xd8\xff", "gif": b"GIF8", "webp": b"RIFF"}
 
 
@@ -71,13 +72,16 @@ def load_json(raw):
     return data
 
 
-def validate(title, body, icon):
-    """(title, body, icon) checked, with a local icon file read as a data: URI."""
+def validate(title, body, icon, sound=""):
+    """(title, body, icon, sound) checked, with a local icon file read as a data: URI. A sound
+    is one of Steam's (SOUNDS); "" leaves it to Steam."""
     if not isinstance(title, str) or not isinstance(body, str) or not isinstance(icon, str):
         raise Rejected(400, "title, body and icon must be text")
+    if sound and (not isinstance(sound, str) or sound not in SOUNDS):
+        raise Rejected(400, f"sound: one of {', '.join(SOUNDS)}")
     if icon and not icon.startswith(("https://", "data:")):
         icon = icon_from_file(icon)  # a local file
-    return title, body, icon
+    return title, body, icon, sound
 
 
 class RateLimit:
@@ -98,8 +102,9 @@ class RateLimit:
 
 
 class NotyServer:
-    """The service. send(title, body, icon) shows the notification and raises
-    ValueError (bad input -> 400) or another exception (Steam can't -> 503).
+    """The service. send(title, body, icon[, sound=]) shows the notification and raises
+    ValueError (bad input -> 400) or another exception (Steam can't -> 503). sound is
+    passed only when one was asked for: otherwise Steam decides.
     endpoint_on(name) and quiet() are read on every request, so turning an endpoint
     off or "do not disturb" on takes effect at once, without a restart."""
 
@@ -143,7 +148,7 @@ class NotyServer:
         self.recent.appendleft(entry)
         return entry
 
-    def receive(self, source, title, body, icon, announce=False):
+    def receive(self, source, title, body, icon, announce=False, sound=""):
         """A notification from an endpoint: shown, or silenced (endpoint off, do not
         disturb). Returns None when shown, or the reason it wasn't. An announcement is
         the endpoint's own message (connected, disconnected): it's shown even as the
@@ -153,16 +158,16 @@ class NotyServer:
         if reason:
             self._entry(source, title, muted=reason)
             return reason
-        self.notify(title, body, icon, source)
+        self.notify(title, body, icon, source, sound)
         return None
 
-    def notify(self, title, body, icon, source="test"):
+    def notify(self, title, body, icon, source="test", sound=""):
         """Show one notification, whatever the silences (rate limit included)."""
         if not self.limit.allow():
             raise Rejected(429, f"too many notifications: {RATE} every {RATE_WINDOW:g} s at most")
         entry = self._entry(source, title)
         try:
-            self.send(title, body, icon)
+            self.send(title, body, icon, sound=sound) if sound else self.send(title, body, icon)
         except ValueError as e:
             entry["error"] = str(e)
             raise Rejected(400, str(e)) from None
@@ -221,8 +226,8 @@ class NotyServer:
                     if found is None:
                         service.log.debug("%s: event ignored", source)
                         return self._answer(200, {"ok": True, "shown": False, "reason": "ignored"})
-                    title, body, icon = validate(*found)
-                    reason = service.receive(source, title, body, icon or service.default_icon(source))
+                    title, body, icon, sound = validate(*found)
+                    reason = service.receive(source, title, body, icon or service.default_icon(source), sound=sound)
                 except Rejected as e:
                     if e.status >= 500:
                         service.log.warning("notification not shown: %s", e)

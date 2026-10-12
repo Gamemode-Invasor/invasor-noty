@@ -50,13 +50,14 @@ class FakeCtx:
     def __init__(self, port):
         self.settings = FakeSettings({**defaults(), "enabled": True, "port": port})
         self.log = logging.getLogger("test.noty")
-        self.shown, self.bodies, self.icons = [], [], []
+        self.shown, self.bodies, self.icons, self.sounds = [], [], [], []
         self.game = types.SimpleNamespace(running=None)
 
-    def notify(self, title, body="", icon=""):
+    def notify(self, title, body="", icon="", sound=""):
         self.shown.append(title)
         self.bodies.append(body)
         self.icons.append(icon)
+        self.sounds.append(sound)
 
 
 class Backend(unittest.TestCase):
@@ -133,10 +134,12 @@ class Backend(unittest.TestCase):
         comet.games.gameplay_dbs.assert_called_with("123")
         self.assertEqual(self.details(b), ["● Comety: /a/gameplay.db", "● Comety: /b/gameplay.db"])
         self.assertEqual((ctx.shown, ctx.bodies), (["Comet - Lil Gator Game"], ["Noty is connecting to Lil Gator Game"]))
+        self.assertEqual(ctx.sounds, ["online"])
         ctx.game.running = None  # the game ends: comety stops, and it's said
         self.wait_for(lambda: self.details(b) == ["Comety: waiting for a game with Comet"])
         self.assertEqual(popen.return_value.terminate.call_count, 2)
         self.assertEqual((ctx.shown[1], ctx.bodies[1]), ("Comet - Lil Gator Game", "Noty disconnected from Lil Gator Game"))
+        self.assertEqual(ctx.sounds[1], "mention")
 
     def test_the_game_message_has_its_logo_or_comets_image(self):
         b, comet, ctx, popen, _ = self.started({"appid": "123", "name": "TOEM"})
@@ -217,6 +220,17 @@ class Backend(unittest.TestCase):
         self.assertTrue(b.test())
         self.assertEqual(ctx.icons[-1], endpoints.default_icon())
 
+    def test_a_sound_reaches_the_core(self):
+        b, comet, ctx, popen, _ = self.started(None)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        for body in ({"title": "a"}, {"title": "b", "sound": "online"}):
+            c = http.client.HTTPConnection("127.0.0.1", b.status()["port"], timeout=5)
+            c.request("POST", "/notify", json.dumps(body), {"Content-Type": "application/json"})
+            self.assertEqual(c.getresponse().status, 200)
+            c.close()
+        self.assertEqual(ctx.sounds, ["", "online"])  # no sound: Steam decides
+
     def test_no_game_no_comety(self):
         b, comet, ctx, popen, _ = self.started(None)
         b.setup(ctx)
@@ -254,6 +268,7 @@ class Backend(unittest.TestCase):
         default = submodule(b, "endpoints").default_icon()  # General has no image of its own
         self.assertTrue(default.startswith("data:image/png;base64,"))
         self.assertEqual(ctx.icons, [default, default])
+        self.assertEqual(ctx.sounds, ["mention", "online"])  # off: mention, on: online
         ctx.settings.change("endpoint_comet", False)  # Comet speaks about games, not about itself
         ctx.settings.change("endpoint_comet", True)
         self.assertEqual(ctx.shown, ["General disconnected", "General connected"])

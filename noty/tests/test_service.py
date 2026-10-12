@@ -30,16 +30,17 @@ class Server(unittest.TestCase):
     """A running service, with its endpoints and "do not disturb" in self.on / self.dnd."""
 
     def setUp(self):
-        self.sent, self.fail = [], None
+        self.sent, self.extra, self.fail = [], [], None
         self.endpoints = BACKEND.endpoints_mod.build()
         self.on, self.dnd = {name: True for name in self.endpoints}, False
 
-        def send(title, body, icon):
+        def send(title, body, icon, **extra):  # extra: only what the service passes on (sound=)
             if self.fail:
                 raise self.fail
             if not title.strip():
                 raise ValueError("a notification needs a title")
             self.sent.append((title, body, icon))
+            self.extra.append(extra)
 
         self.s = service.NotyServer(0, send, logging.getLogger("test.noty"), endpoints=self.endpoints.values(),
                                     unavailable=(Unavailable,),
@@ -61,6 +62,27 @@ class Server(unittest.TestCase):
 
 
 class Service(Server):
+    def test_without_a_sound_steam_decides(self):
+        self.request(body={"title": "Hi"})
+        self.assertEqual(self.extra, [{}])
+
+    def test_a_sound_is_passed_on(self):
+        self.assertEqual(self.request(body={"title": "Hi", "sound": "toast"}), (200, {"ok": True, "shown": True}))
+        self.assertEqual(self.sent, [("Hi", "", "")])
+        self.assertEqual(self.extra, [{"sound": "toast"}])
+
+    def test_an_unknown_sound_is_refused(self):
+        for sound in ("beep", 3):
+            status, answer = self.request(body={"title": "Hi", "sound": sound})
+            self.assertEqual(status, 400)
+            self.assertIn("sound", answer["error"])
+        self.assertEqual(self.sent, [])
+
+    def test_a_sound_is_silenced_like_the_rest(self):
+        self.dnd = True
+        self.assertEqual(self.request(body={"title": "Hi", "sound": "chat"})[1]["reason"], "do_not_disturb")
+        self.assertEqual(self.sent, [])
+
     def test_shows_a_notification(self):
         self.assertEqual(self.request(body={"title": "Hi", "body": "There"}), (200, {"ok": True, "shown": True}))
         self.assertEqual(self.sent, [("Hi", "There", "")])
@@ -180,6 +202,7 @@ class Comet(Server):
         self.assertEqual(self.sent, [("¿Lo puedo acariciar?", "Acaricia una mascota. · 70.6%",
                                       "https://images.gog.com/9fa16_gac_60.jpg")])
         self.assertEqual(self.s.recent[0]["source"], "comet")
+        self.assertEqual(self.extra, [{"sound": "trophy"}])  # always the trophy sound
 
     def test_extra_fields_are_fine(self):
         payload = comet_payload(new_field=[1, 2], rarity=None, description=None)

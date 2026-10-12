@@ -16,6 +16,7 @@ curl -X POST http://127.0.0.1:33811/notify -H 'Content-Type: application/json' \
 | `title` | yes | Plain text, up to 64 characters. |
 | `body` | no | Plain text, up to 256 characters. |
 | `icon` | no | An `https://` image URL, `data:image/…;base64,…`, or an absolute path to a `.png`, `.jpg`, `.gif` or `.webp` file on this machine (up to 384 KB). |
+| `sound` | no | One of Steam's own sounds: `trophy`, `message`, `toast`, `chat`, `mention`, `friend`, `online`, `ingame`, or `none` (silent). Left out, Steam decides, as always. Most are only audible in Game Mode. Any other name is a `400`. |
 
 Answers: `200 {"ok": true, "shown": true}` when shown; `400` bad request; `413` too large; `415` not JSON;
 `429` more than 5 in 10 s; `503` Steam can't show it right now. The tab shows whether the service is listening, a test
@@ -26,7 +27,7 @@ Each program can send its own format to its own endpoint; Noty turns it into a n
 
 | Endpoint | For | Payload |
 |---|---|---|
-| `/notify` | general: your scripts and any program | `{"title", "body", "icon"}` as above. Unknown fields are an error. |
+| `/notify` | general: your scripts and any program | `{"title", "body", "icon", "sound"}` as above. Unknown fields are an error. |
 | `/notify/comet` | [Comet](https://github.com/imLinguin/comet) (GOG) | Comet's unlocked achievement, sent as a flat JSON object. |
 
 For Comet, the notification takes `name` as the title, `description` (and the `rarity`) as the body, and
@@ -66,7 +67,7 @@ extends `Endpoint` (`endpoints.py`) and is listed in `build()`:
 | | |
 |---|---|
 | `name`, `path`, `label`, `icon` | Its setting (`endpoint_<name>` in `module.json`), where to POST, how its messages call it, and its image (a file in `assets/`). |
-| `adapt(data)` | The payload as `(title, body, icon)`, or `None` to ignore it. |
+| `adapt(data)` | The payload as `(title, body, icon)` or `(title, body, icon, sound)`, or `None` to ignore it. |
 | `start(host)` / `stop()` | It's on (the service runs and its switch is on) / it's off or the service stops. |
 | `connected(host)` / `disconnected(host)` | The user turned it on / off. By default: a notification "<label> connected" / "<label> disconnected" with its image, or Noty's own (`assets/default.png`) if it has none. Comet says nothing here: it speaks when it connects to a game. |
 | `details()` | Extra lines the tab shows under it. |
@@ -95,6 +96,10 @@ Needs an Invasor core with `author` support in module.json.
 ## Changes
 
 ### 0.3.0
+- `/notify` takes an optional `sound` (`trophy`, `message`, `toast`, `chat`, `mention`, `friend`, `online`, `ingame`,
+  `none`): the Steam sound that notification plays. Without it nothing changes: Steam decides. Needs core v0.2.0.
+- Sounds of Noty's own: a Comet achievement always plays `trophy`; an endpoint turned on (and Comet connecting to a
+  game) plays `online`, and one turned off (or the game ending) plays `mention`.
 - `/notify/comet` takes Comet's new payload: the unlocked achievement as a flat JSON object (`name`, `description`,
   `rarity`, `image_url_unlocked`…), no longer wrapped in an `event`. The cached local image (`image_path`) is gone.
 - Only an achievement unlocked in the last 5 minutes is shown (`unlock_time`); anything else is answered `ignored`.
