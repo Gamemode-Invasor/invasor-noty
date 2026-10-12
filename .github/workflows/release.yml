@@ -1,6 +1,6 @@
 name: Release
 
-# Pushing a tag such as v0.2.0 publishes <id>-<version>.zip (and its .sha256) as a GitHub release.
+# Pushing a tag such as v0.3.0 publishes <id>-<version>.zip (and its .sha256) as a GitHub release.
 # The tag must match the version in module.json. It is built against the core version in core-ref.
 on:
   push:
@@ -14,5 +14,5 @@ jobs:
     uses: Gamemode-Invasor/invasor/.github/workflows/module.yml@main
     with:
       release: true
-      core-ref: v0.1.0
+      core-ref: v0.1.5
     secrets: inherit

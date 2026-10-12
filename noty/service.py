@@ -3,11 +3,10 @@
 Pure stdlib, no Invasor imports: tested on its own (tests/test_service.py). It listens
 on 127.0.0.1 only, so only programs on this machine can use it.
 
-    POST /notify         {"title": "…", "body": "…", "icon": "https://…" | "data:image/…" | "/path/to/image.png"}
-    POST /notify/comet   Comet's (GOG) event payload: {"event": "achievement_unlocked", "achievement": {…}}
-    GET  /               {"ok": true, "service": "noty", "endpoints": [...]}
+    POST <path>   an endpoint's payload (endpoint_*.py: /notify, /notify/comet…)
+    GET  /        {"ok": true, "service": "noty", "endpoints": [...]}
 
-Each endpoint has an adapter (ENDPOINTS) that turns its payload into (title, body, icon),
+Each endpoint (endpoints.py) has an adapt() that turns its payload into (title, body, icon),
 or None for an event that isn't shown. An endpoint can be turned off, and "do not
 disturb" silences them all: the request is still checked and answered (200, shown:
 false), but nothing is shown.
@@ -81,45 +80,6 @@ def validate(title, body, icon):
     return title, body, icon
 
 
-def native(data):
-    """/notify: Noty's own format, strict (a typo in a field name is an error)."""
-    unknown = set(data) - {"title", "body", "icon"}
-    if unknown:
-        raise Rejected(400, f"unknown field(s): {', '.join(sorted(unknown))}")
-    return data.get("title"), data.get("body", ""), data.get("icon", "")
-
-
-def comet(data):
-    """/notify/comet: Comet's events. Lenient: Comet may add fields at any time.
-    Only unlocked achievements are shown; other events are ignored (None)."""
-    if data.get("event") != "achievement_unlocked":
-        return None
-    a = data.get("achievement")
-    if not isinstance(a, dict) or not isinstance(a.get("name"), str):
-        raise Rejected(400, "achievement.name is required")
-    body = a.get("description")
-    body = body if isinstance(body, str) else ""
-    rarity = a.get("rarity")
-    if isinstance(rarity, (int, float)) and not isinstance(rarity, bool):
-        body = f"{body} · {rarity:.1f}%" if body else f"{rarity:.1f}%"
-    path, url = a.get("image_path"), a.get("image_url")
-    if isinstance(path, str) and Path(path).is_absolute() and Path(path).is_file():
-        icon = path  # cached by Comet: works offline
-    elif isinstance(url, str) and url.startswith("https://"):
-        icon = url
-    else:
-        icon = ""
-    return a["name"], body, icon
-
-
-# name -> (path, adapter). The name is the endpoint's setting: endpoint_<name>.
-ENDPOINTS = {
-    "general": ("/notify", native),
-    "comet": ("/notify/comet", comet),
-}
-ROUTES = {path: (name, adapter) for name, (path, adapter) in ENDPOINTS.items()}
-
-
 class RateLimit:
     def __init__(self, count=RATE, window=RATE_WINDOW, clock=time.monotonic):
         self.count, self.window, self.clock = count, window, clock
@@ -143,9 +103,11 @@ class NotyServer:
     endpoint_on(name) and quiet() are read on every request, so turning an endpoint
     off or "do not disturb" on takes effect at once, without a restart."""
 
-    def __init__(self, port, send, log, unavailable=(), host=HOST,
-                 endpoint_on=lambda name: True, quiet=lambda: False):
+    def __init__(self, port, send, log, endpoints=(), unavailable=(), host=HOST,
+                 endpoint_on=lambda name: True, quiet=lambda: False, default_icon=lambda name: ""):
         self.port, self.send, self.log, self.host = port, send, log, host
+        self.routes = {ep.path: (ep.name, ep.adapt) for ep in endpoints}
+        self.default_icon = default_icon  # name -> the icon of a notification that has none
         self.endpoint_on, self.quiet = endpoint_on, quiet
         self.unavailable = tuple(unavailable)
         self.limit = RateLimit()
@@ -181,10 +143,12 @@ class NotyServer:
         self.recent.appendleft(entry)
         return entry
 
-    def receive(self, source, title, body, icon):
+    def receive(self, source, title, body, icon, announce=False):
         """A notification from an endpoint: shown, or silenced (endpoint off, do not
-        disturb). Returns None when shown, or the reason it wasn't."""
-        reason = ("endpoint_off" if not self.endpoint_on(source)
+        disturb). Returns None when shown, or the reason it wasn't. An announcement is
+        the endpoint's own message (connected, disconnected): it's shown even as the
+        endpoint is turned off."""
+        reason = ("endpoint_off" if not announce and not self.endpoint_on(source)
                   else "do_not_disturb" if self.quiet() else None)
         if reason:
             self._entry(source, title, muted=reason)
@@ -233,16 +197,16 @@ class NotyServer:
                 if not self._host_ok():
                     return self._answer(403, {"ok": False, "error": "use 127.0.0.1"})
                 if self.path != "/":
-                    return self._answer(404, {"ok": False, "error": "POST to " + ", ".join(ROUTES)})
-                self._answer(200, {"ok": True, "service": "noty", "endpoints": list(ROUTES)})
+                    return self._answer(404, {"ok": False, "error": "POST to " + ", ".join(service.routes)})
+                self._answer(200, {"ok": True, "service": "noty", "endpoints": list(service.routes)})
 
             def do_POST(self):
                 try:
                     if not self._host_ok():
                         raise Rejected(403, "use 127.0.0.1")
-                    route = ROUTES.get(self.path)
+                    route = service.routes.get(self.path)
                     if not route:
-                        raise Rejected(404, "POST to " + ", ".join(ROUTES))
+                        raise Rejected(404, "POST to " + ", ".join(service.routes))
                     source, adapter = route
                     ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
                     if ctype != "application/json":
@@ -257,7 +221,8 @@ class NotyServer:
                     if found is None:
                         service.log.debug("%s: event ignored", source)
                         return self._answer(200, {"ok": True, "shown": False, "reason": "ignored"})
-                    reason = service.receive(source, *validate(*found))
+                    title, body, icon = validate(*found)
+                    reason = service.receive(source, title, body, icon or service.default_icon(source))
                 except Rejected as e:
                     if e.status >= 500:
                         service.log.warning("notification not shown: %s", e)

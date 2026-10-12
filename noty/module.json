@@ -1,7 +1,7 @@
 {
   "api": 1,
   "name": "Noty",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "FranjeGueje",
   "description": "Show Steam notifications from your own scripts and from programs like Comet: POST JSON to a local web service.",
   "order": 40,

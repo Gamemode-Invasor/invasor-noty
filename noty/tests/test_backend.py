@@ -1,12 +1,13 @@
-import importlib.util
+import http.client
 import json
 import logging
 import socket
-import sys
+import time
+import types
 import unittest
-from pathlib import Path
+from unittest import mock
 
-HERE = Path(__file__).resolve().parents[1]
+from tests.loader import HERE, free_port, load_backend, submodule
 MODULE = json.loads((HERE / "module.json").read_text())
 
 
@@ -49,27 +50,13 @@ class FakeCtx:
     def __init__(self, port):
         self.settings = FakeSettings({**defaults(), "enabled": True, "port": port})
         self.log = logging.getLogger("test.noty")
-        self.shown = []
+        self.shown, self.bodies, self.icons = [], [], []
+        self.game = types.SimpleNamespace(running=None)
 
     def notify(self, title, body="", icon=""):
         self.shown.append(title)
-
-
-def load_backend():
-    name = "noty_backend_under_test"
-    for n in [n for n in sys.modules if n == name or n.startswith(name + ".")]:
-        del sys.modules[n]
-    spec = importlib.util.spec_from_file_location(name, HERE / "backend.py", submodule_search_locations=[str(HERE)])
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+        self.bodies.append(body)
+        self.icons.append(icon)
 
 
 class Backend(unittest.TestCase):
@@ -110,10 +97,174 @@ class Backend(unittest.TestCase):
         ctx.settings.change("port", free_port())
         self.assertIsNot(b.server, server)  # the port does restart it
 
+    def started(self, running, dbs=("/a/gameplay.db", "/b/gameplay.db")):
+        """A backend with a game running, a (mocked) comety, and the databases that were found."""
+        b = load_backend()
+        comet = submodule(b, "endpoint_comet")
+        comet.GAME_WAITS, comet.GAME_POLL = (0.01, 0.01, 0.01), 0.01
+        comet.games = mock.Mock(gameplay_dbs=mock.Mock(return_value=list(dbs)), logo_files=mock.Mock(return_value=[]))
+        popen = mock.patch.object(comet.subprocess, "Popen").start()
+        popen.return_value.poll.return_value = None
+        chmod = mock.patch.object(comet.os, "chmod").start()
+        self.addCleanup(mock.patch.stopall)
+        ctx = FakeCtx(free_port())
+        ctx.game.running = running
+        return b, comet, ctx, popen, chmod
+
+    def wait_for(self, cond):
+        for _ in range(300):
+            if cond():
+                return
+            time.sleep(0.01)
+        self.fail("timed out")
+
+    def details(self, b):
+        return b.status()["endpoints"][1]["details"]
+
+    def test_comety_runs_for_each_database_of_the_game_being_played(self):
+        b, comet, ctx, popen, chmod = self.started({"appid": "123", "name": "Lil Gator Game"})
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: popen.call_count == 2)
+        url = f"http://127.0.0.1:{b.status()['port']}/notify/comet"
+        self.assertEqual([c.args[0][1:] for c in popen.call_args_list],
+                         [["--url", url, "--quiet", "/a/gameplay.db"], ["--url", url, "--quiet", "/b/gameplay.db"]])
+        chmod.assert_called_with(comet.COMETY_BIN, 0o755)
+        comet.games.gameplay_dbs.assert_called_with("123")
+        self.assertEqual(self.details(b), ["● Comety: /a/gameplay.db", "● Comety: /b/gameplay.db"])
+        self.assertEqual((ctx.shown, ctx.bodies), (["Comet - Lil Gator Game"], ["Noty is connecting to Lil Gator Game"]))
+        ctx.game.running = None  # the game ends: comety stops, and it's said
+        self.wait_for(lambda: self.details(b) == ["Comety: waiting for a game with Comet"])
+        self.assertEqual(popen.return_value.terminate.call_count, 2)
+        self.assertEqual((ctx.shown[1], ctx.bodies[1]), ("Comet - Lil Gator Game", "Noty disconnected from Lil Gator Game"))
+
+    def test_the_game_message_has_its_logo_or_comets_image(self):
+        b, comet, ctx, popen, _ = self.started({"appid": "123", "name": "TOEM"})
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: ctx.icons)
+        self.assertTrue(ctx.icons[0].startswith("data:image/png;base64,"))  # no logo: comety.png
+        self.assertEqual(ctx.icons[0], b.eps["comet"].icon_data())
+        self.assertNotEqual(ctx.icons[0], "")
+        logo = HERE / "assets" / "comety.png"  # any real image will do as the game's logo
+        comet.games.logo_files.return_value = [str(logo)]
+        ctx.game.running = None
+        self.wait_for(lambda: len(ctx.icons) == 2)
+        self.assertTrue(ctx.icons[1].startswith("data:image/png;base64,"))
+
+    def test_databases_that_appear_later_are_found(self):
+        b, comet, ctx, popen, _ = self.started({"appid": "123", "name": "TOEM"})
+        comet.games.gameplay_dbs.return_value = []
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: comet.games.gameplay_dbs.call_count >= 2)
+        popen.assert_not_called()
+        comet.games.gameplay_dbs.return_value = ["/a/gameplay.db"]
+        self.wait_for(lambda: ctx.shown)
+        self.assertEqual((popen.call_count, ctx.shown), (1, ["Comet - TOEM"]))
+
+    def test_it_gives_up_after_the_retries(self):
+        b, comet, ctx, popen, _ = self.started({"appid": "123", "name": "TOEM"}, dbs=())
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: comet.games.gameplay_dbs.call_count == len(comet.GAME_WAITS))
+        time.sleep(0.2)
+        self.assertEqual(comet.games.gameplay_dbs.call_count, len(comet.GAME_WAITS))
+        popen.assert_not_called()
+
+    def test_endpoint_off_no_comety_and_back_on_it_starts(self):
+        b, comet, ctx, popen, _ = self.started({"appid": "123", "name": "TOEM"})
+        ctx.settings.values["endpoint_comet"] = False
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        time.sleep(0.2)
+        popen.assert_not_called()
+        comet.games.gameplay_dbs.assert_not_called()
+        self.assertEqual((self.details(b), ctx.shown), ([], []))
+        self.assertTrue(b.test())  # the rest of Noty works
+        ctx.shown.clear()
+        ctx.settings.change("endpoint_comet", True)  # the game is still running: connects to it, saying nothing else
+        self.wait_for(lambda: popen.call_count == 2 and ctx.shown)
+        self.assertEqual(ctx.shown, ["Comet - TOEM"])
+        ctx.settings.change("endpoint_comet", False)  # and off again: they stop, and it says so
+        self.wait_for(lambda: self.details(b) == [])
+        self.assertEqual(popen.return_value.terminate.call_count, 2)
+        self.assertEqual(ctx.bodies[-1], "Noty disconnected from TOEM")
+
+    def test_a_notification_without_an_image_gets_its_endpoints_or_noty_s(self):
+        b, comet, ctx, popen, _ = self.started(None)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        endpoints = submodule(b, "endpoints")
+
+        def post(path, body):
+            c = http.client.HTTPConnection("127.0.0.1", b.status()["port"], timeout=5)
+            c.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+            r = c.getresponse()
+            r.read()
+            c.close()
+            return r.status
+
+        when = time.strftime("%Y-%m-%dT%H:%M:%S+0000", time.gmtime())
+        self.assertEqual(post("/notify", {"title": "Hi"}), 200)  # General has no image: Noty's
+        self.assertEqual(post("/notify", {"title": "Hi", "icon": "https://x.example/a.png"}), 200)
+        self.assertEqual(post("/notify/comet", {"name": "Won", "unlock_time": when}), 200)  # Comet's own
+        self.assertEqual(post("/notify/comet", {"name": "Won", "unlock_time": when,
+                                                "image_url_unlocked": "https://x.example/b.png"}), 200)
+        self.assertEqual(ctx.icons, [endpoints.default_icon(), "https://x.example/a.png",
+                                     b.eps["comet"].icon_data(), "https://x.example/b.png"])
+        self.assertNotEqual(b.eps["comet"].icon_data(), endpoints.default_icon())
+        self.assertTrue(b.test())
+        self.assertEqual(ctx.icons[-1], endpoints.default_icon())
+
+    def test_no_game_no_comety(self):
+        b, comet, ctx, popen, _ = self.started(None)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        time.sleep(0.1)
+        popen.assert_not_called()
+        self.assertEqual((self.details(b), ctx.shown), (["Comety: waiting for a game with Comet"], []))
+
+    def test_a_game_without_databases_shows_nothing(self):
+        b, comet, ctx, popen, _ = self.started({"appid": "5", "name": "x"}, dbs=())
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: comet.games.gameplay_dbs.call_count >= 2)
+        popen.assert_not_called()
+        self.assertEqual(ctx.shown, [])
+
+    def test_comety_failing_doesnt_stop_the_service(self):
+        b, comet, ctx, popen, _ = self.started({"appid": "5", "name": "x"})
+        popen.side_effect = FileNotFoundError(2, "No such file")
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.wait_for(lambda: popen.called)
+        self.assertTrue(b.status()["running"])
+        self.assertFalse(any(line.startswith("●") for line in self.details(b)))
+
+    def test_turning_an_endpoint_on_or_off_says_so(self):
+        b = load_backend()
+        ctx = FakeCtx(free_port())
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.assertEqual(ctx.shown, [])  # starting the service says nothing
+        ctx.settings.change("endpoint_general", False)
+        ctx.settings.change("endpoint_general", True)
+        self.assertEqual(ctx.shown, ["General disconnected", "General connected"])
+        default = submodule(b, "endpoints").default_icon()  # General has no image of its own
+        self.assertTrue(default.startswith("data:image/png;base64,"))
+        self.assertEqual(ctx.icons, [default, default])
+        ctx.settings.change("endpoint_comet", False)  # Comet speaks about games, not about itself
+        ctx.settings.change("endpoint_comet", True)
+        self.assertEqual(ctx.shown, ["General disconnected", "General connected"])
+        ctx.settings.change("dnd", True)  # and "do not disturb" silences them
+        ctx.settings.change("endpoint_general", False)
+        self.assertEqual(len(ctx.shown), 2)
+
     def test_every_endpoint_has_its_setting(self):
         b = load_backend()
         settings = defaults()
-        for name in b.service.ENDPOINTS:
+        for name in b.endpoints_mod.build():
             with self.subTest(endpoint=name):
                 self.assertIs(settings.get(f"endpoint_{name}"), True)
 
