@@ -41,11 +41,11 @@ class Endpoint:
 
     def connected(self, host):
         """The user turned it on. Say so (an endpoint may say it in its own way, or not at all)."""
-        host.announce(self, f"{self.label} connected", f"Noty shows what is POSTed to {self.path}.")
+        host.announce(self, f"{self.label} connected", f"Noty shows what is POSTed to {self.path}.", sound="online")
 
     def disconnected(self, host):
         """The user is turning it off (called before stop())."""
-        host.announce(self, f"{self.label} disconnected", "Noty no longer shows its notifications.")
+        host.announce(self, f"{self.label} disconnected", "Noty no longer shows its notifications.", sound="mention")
 
     def details(self):
         """Lines for the tab, under the endpoint, while it's on."""

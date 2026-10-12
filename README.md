@@ -98,6 +98,8 @@ Needs an Invasor core with `author` support in module.json.
 ### 0.3.0
 - `/notify` takes an optional `sound` (`trophy`, `message`, `toast`, `chat`, `mention`, `friend`, `online`, `ingame`,
   `none`): the Steam sound that notification plays. Without it nothing changes: Steam decides. Needs core v0.2.0.
+- Sounds of Noty's own: a Comet achievement always plays `trophy`; an endpoint turned on (and Comet connecting to a
+  game) plays `online`, and one turned off (or the game ending) plays `mention`.
 - `/notify/comet` takes Comet's new payload: the unlocked achievement as a flat JSON object (`name`, `description`,
   `rarity`, `image_url_unlocked`…), no longer wrapped in an `event`. The cached local image (`image_path`) is gone.
 - Only an achievement unlocked in the last 5 minutes is shown (`unlock_time`); anything else is answered `ignored`.

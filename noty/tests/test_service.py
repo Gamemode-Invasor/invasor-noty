@@ -202,6 +202,7 @@ class Comet(Server):
         self.assertEqual(self.sent, [("¿Lo puedo acariciar?", "Acaricia una mascota. · 70.6%",
                                       "https://images.gog.com/9fa16_gac_60.jpg")])
         self.assertEqual(self.s.recent[0]["source"], "comet")
+        self.assertEqual(self.extra, [{"sound": "trophy"}])  # always the trophy sound
 
     def test_extra_fields_are_fine(self):
         payload = comet_payload(new_field=[1, 2], rarity=None, description=None)
