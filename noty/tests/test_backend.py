@@ -1,3 +1,4 @@
+import http.client
 import json
 import logging
 import socket
@@ -190,6 +191,32 @@ class Backend(unittest.TestCase):
         self.assertEqual(popen.return_value.terminate.call_count, 2)
         self.assertEqual(ctx.bodies[-1], "Noty disconnected from TOEM")
 
+    def test_a_notification_without_an_image_gets_its_endpoints_or_noty_s(self):
+        b, comet, ctx, popen, _ = self.started(None)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        endpoints = submodule(b, "endpoints")
+
+        def post(path, body):
+            c = http.client.HTTPConnection("127.0.0.1", b.status()["port"], timeout=5)
+            c.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+            r = c.getresponse()
+            r.read()
+            c.close()
+            return r.status
+
+        when = time.strftime("%Y-%m-%dT%H:%M:%S+0000", time.gmtime())
+        self.assertEqual(post("/notify", {"title": "Hi"}), 200)  # General has no image: Noty's
+        self.assertEqual(post("/notify", {"title": "Hi", "icon": "https://x.example/a.png"}), 200)
+        self.assertEqual(post("/notify/comet", {"name": "Won", "unlock_time": when}), 200)  # Comet's own
+        self.assertEqual(post("/notify/comet", {"name": "Won", "unlock_time": when,
+                                                "image_url_unlocked": "https://x.example/b.png"}), 200)
+        self.assertEqual(ctx.icons, [endpoints.default_icon(), "https://x.example/a.png",
+                                     b.eps["comet"].icon_data(), "https://x.example/b.png"])
+        self.assertNotEqual(b.eps["comet"].icon_data(), endpoints.default_icon())
+        self.assertTrue(b.test())
+        self.assertEqual(ctx.icons[-1], endpoints.default_icon())
+
     def test_no_game_no_comety(self):
         b, comet, ctx, popen, _ = self.started(None)
         b.setup(ctx)
@@ -224,6 +251,9 @@ class Backend(unittest.TestCase):
         ctx.settings.change("endpoint_general", False)
         ctx.settings.change("endpoint_general", True)
         self.assertEqual(ctx.shown, ["General disconnected", "General connected"])
+        default = submodule(b, "endpoints").default_icon()  # General has no image of its own
+        self.assertTrue(default.startswith("data:image/png;base64,"))
+        self.assertEqual(ctx.icons, [default, default])
         ctx.settings.change("endpoint_comet", False)  # Comet speaks about games, not about itself
         ctx.settings.change("endpoint_comet", True)
         self.assertEqual(ctx.shown, ["General disconnected", "General connected"])

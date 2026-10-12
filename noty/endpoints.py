@@ -5,11 +5,21 @@ into a notification, and what to do when it starts and stops. Subclass Endpoint,
 endpoint_<name>.py, and add it to build(). Its on/off switch is the setting endpoint_<name>
 (module.json).
 """
+from functools import lru_cache
 from pathlib import Path
 
 from . import service
 
 ASSETS = Path(__file__).resolve().parent / "assets"
+
+
+@lru_cache(maxsize=None)
+def default_icon():
+    """Noty's own image (assets/default.png) as a data: URI, or "" if it can't be read."""
+    try:
+        return service.icon_from_file(ASSETS / "default.png")
+    except service.Rejected:
+        return ""
 
 
 class Endpoint:
@@ -43,10 +53,16 @@ class Endpoint:
 
     def icon_data(self):
         """Its image as a data: URI, or "" if it has none."""
-        try:
-            return service.icon_from_file(ASSETS / self.icon) if self.icon else ""
-        except service.Rejected:
-            return ""
+        if not hasattr(self, "_icon_data"):
+            try:
+                self._icon_data = service.icon_from_file(ASSETS / self.icon) if self.icon else ""
+            except service.Rejected:
+                self._icon_data = ""
+        return self._icon_data
+
+    def icon_or_default(self):
+        """Its image, or Noty's own if it has none."""
+        return self.icon_data() or default_icon()
 
 
 def build():

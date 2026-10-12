@@ -104,9 +104,10 @@ class NotyServer:
     off or "do not disturb" on takes effect at once, without a restart."""
 
     def __init__(self, port, send, log, endpoints=(), unavailable=(), host=HOST,
-                 endpoint_on=lambda name: True, quiet=lambda: False):
+                 endpoint_on=lambda name: True, quiet=lambda: False, default_icon=lambda name: ""):
         self.port, self.send, self.log, self.host = port, send, log, host
         self.routes = {ep.path: (ep.name, ep.adapt) for ep in endpoints}
+        self.default_icon = default_icon  # name -> the icon of a notification that has none
         self.endpoint_on, self.quiet = endpoint_on, quiet
         self.unavailable = tuple(unavailable)
         self.limit = RateLimit()
@@ -220,7 +221,8 @@ class NotyServer:
                     if found is None:
                         service.log.debug("%s: event ignored", source)
                         return self._answer(200, {"ok": True, "shown": False, "reason": "ignored"})
-                    reason = service.receive(source, *validate(*found))
+                    title, body, icon = validate(*found)
+                    reason = service.receive(source, title, body, icon or service.default_icon(source))
                 except Rejected as e:
                     if e.status >= 500:
                         service.log.warning("notification not shown: %s", e)

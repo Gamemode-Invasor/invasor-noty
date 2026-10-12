@@ -68,7 +68,7 @@ extends `Endpoint` (`endpoints.py`) and is listed in `build()`:
 | `name`, `path`, `label`, `icon` | Its setting (`endpoint_<name>` in `module.json`), where to POST, how its messages call it, and its image (a file in `assets/`). |
 | `adapt(data)` | The payload as `(title, body, icon)`, or `None` to ignore it. |
 | `start(host)` / `stop()` | It's on (the service runs and its switch is on) / it's off or the service stops. |
-| `connected(host)` / `disconnected(host)` | The user turned it on / off. By default: a notification "<label> connected" / "<label> disconnected" with its image. Comet says nothing here: it speaks when it connects to a game. |
+| `connected(host)` / `disconnected(host)` | The user turned it on / off. By default: a notification "<label> connected" / "<label> disconnected" with its image, or Noty's own (`assets/default.png`) if it has none. Comet says nothing here: it speaks when it connects to a game. |
 | `details()` | Extra lines the tab shows under it. |
 
 Starting the service doesn't announce anything: only the user turning an endpoint on or off does.
@@ -108,6 +108,8 @@ Needs an Invasor core with `author` support in module.json.
   and stops, its image, and what it says when the user turns it on or off ("General connected"). Comet says it when it
   connects to a game and when the game ends. Its notifications carry Comet's image (`assets/comety.png`) when the game
   has no logo.
+- A notification without an image carries its endpoint's one (`assets/comety.png` for Comet) or, if the endpoint has
+  none, Noty's default (`assets/default.png`): its own messages ("General connected") and what is POSTed to it.
 - The module zip now includes the files under `bin/` and `assets/` (needs the core's updated `pack_module.py`).
 
 ### 0.2.0

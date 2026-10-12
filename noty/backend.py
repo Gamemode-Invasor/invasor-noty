@@ -31,19 +31,25 @@ class Host:
         return server.port if server else None
 
     def announce(self, endpoint, title, body="", icon=""):
-        """A message of the endpoint itself, with its image unless there's a better icon. It
-        follows "do not disturb" and the rate limit; it doesn't need the endpoint to be on."""
+        """A message of the endpoint itself, with its image unless there's a better icon (or
+        Noty's default one, if the endpoint has none). It follows "do not disturb" and the
+        rate limit; it doesn't need the endpoint to be on."""
         s = server
         if not s:
             return
         try:
-            s.receive(endpoint.name, title[:64], body[:256], icon or endpoint.icon_data(), announce=True)
+            s.receive(endpoint.name, title[:64], body[:256], icon or endpoint.icon_or_default(), announce=True)
         except service.Rejected as e:
             self.log.warning("%s: message not shown: %s", endpoint.name, e)
 
 
 def _on(endpoint):
     return bool(ctx.settings.get(f"endpoint_{endpoint.name}"))
+
+
+def _icon_for(name):
+    """The icon of a notification of the endpoint that has none: its image, or Noty's."""
+    return eps[name].icon_or_default() if name in eps else endpoints_mod.default_icon()
 
 
 def _stop_endpoints():
@@ -68,7 +74,7 @@ def _start():
         port = ctx.settings.get("port")
         s = service.NotyServer(port, ctx.notify, ctx.log, endpoints=eps.values(), unavailable=(ctx.Unavailable,),
                                endpoint_on=lambda name: ctx.settings.get(f"endpoint_{name}"),
-                               quiet=lambda: ctx.settings.get("dnd"))
+                               quiet=lambda: ctx.settings.get("dnd"), default_icon=_icon_for)
         try:
             s.start()
         except OSError as e:
@@ -148,7 +154,7 @@ def test():
     ignores "do not disturb" and the endpoints: the user asked for it."""
     s = server or service.NotyServer(0, ctx.notify, ctx.log, unavailable=(ctx.Unavailable,))
     try:
-        s.notify("Noty", "This is a test notification from Invasor.", "")
+        s.notify("Noty", "This is a test notification from Invasor.", endpoints_mod.default_icon())
     except service.Rejected as e:
         raise (ctx.Unavailable if e.status == 503 else ctx.InvalidArgument)(str(e)) from None
     return True
