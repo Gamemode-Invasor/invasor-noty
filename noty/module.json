@@ -1,7 +1,8 @@
 {
   "api": 1,
+  "min_core": "0.2.0",
   "name": "Noty",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "FranjeGueje",
   "description": "Show Steam notifications from your own scripts and from programs like Comet: POST JSON to a local web service.",
   "order": 40,
@@ -42,7 +43,7 @@
           "type": "toggle",
           "label": "General — /notify",
           "default": true,
-          "hint": "Noty's own format: {\"title\", \"body\", \"icon\"}. Off: requests are answered, but nothing is shown."
+          "hint": "Noty's own format: {\"title\", \"body\", \"icon\", \"sound\"}. Off: requests are answered, but nothing is shown."
         },
         {
           "key": "endpoint_comet",

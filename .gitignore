@@ -13,3 +13,9 @@ __pycache__/
 .DS_Store
 AGENTS.md
 CLAUDE.md
+
+# Comety build
+comety/deps/
+comety/*.o
+comety/comety
+comety/comety.no-static

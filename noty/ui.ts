@@ -9,6 +9,7 @@ interface Endpoint {
   path: string;
   url: string;
   on: boolean;
+  details: string[];
 }
 
 interface Status {
@@ -59,7 +60,10 @@ async function refresh(ctx: ModuleCtx) {
       ...(st.running && st.dnd ? [ui.info("🔕 Do not disturb: requests are answered, but nothing is shown.")] : []),
     );
     endpointsEl.replaceChildren(
-      ...st.endpoints.map((e) => ui.info(`${e.on ? "●" : "○ off —"} ${e.name}: POST ${e.url}`)),
+      ...st.endpoints.flatMap((e) => [
+        ui.info(`${e.on ? "●" : "○ off —"} ${e.name}: POST ${e.url}`),
+        ...e.details.map((line) => ui.info(`      ${line}`)),
+      ]),
     );
     const list = await ctx.call<Recent[]>("recent");
     recentEl.replaceChildren(
@@ -96,9 +100,9 @@ export default defineModule({
         "How to send one",
         [
           endpointsEl,
-          ui.info('/notify takes {"title": "…", "body": "…", "icon": "…"}. Only the title is required.'),
-          ui.info("/notify/comet takes Comet's events; unlocked achievements are shown, other events are ignored."),
-          ui.info("title: up to 64 characters. body: up to 256. icon: an https:// image URL, data:image/…;base64, or an absolute path to a .png/.jpg/.gif/.webp file on this machine."),
+          ui.info('/notify takes {"title": "…", "body": "…", "icon": "…", "sound": "…"}. Only the title is required.'),
+          ui.info("/notify/comet takes Comet's unlocked achievement (name, description, rarity, image_url_unlocked)."),
+          ui.info("title: up to 64 characters. body: up to 256. icon: an https:// image URL, data:image/…;base64, or an absolute path to a .png/.jpg/.gif/.webp file on this machine. sound (optional): trophy, message, toast, chat, mention, friend, online, ingame or none; left out, Steam decides."),
           ui.info('Answers: 200 {"shown": true}, or {"shown": false, "reason": …} when silenced or ignored; 400 bad request; 429 more than 5 in 10 s; 503 Steam can\'t show it right now.'),
           ui.info("They look like Steam's achievement notifications, and follow Steam's setting for achievement notifications."),
         ],
