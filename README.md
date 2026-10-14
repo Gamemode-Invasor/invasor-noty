@@ -15,7 +15,7 @@ curl -X POST http://127.0.0.1:33811/notify -H 'Content-Type: application/json' \
 |---|---|---|
 | `title` | yes | Plain text, up to 64 characters. |
 | `body` | no | Plain text, up to 256 characters. |
-| `icon` | no | An `https://` image URL, `data:image/…;base64,…`, or an absolute path to a `.png`, `.jpg`, `.gif` or `.webp` file on this machine (up to 384 KB). |
+| `icon` | no | An `https://` image URL, `data:image/…;base64,…`, or an absolute path to a `.png`, `.jpg`, `.gif` or `.webp` file on this machine (up to 384 KB: the core's 512 KB limit counts the image once encoded). |
 | `sound` | no | One of Steam's own sounds: `trophy`, `message`, `toast`, `chat`, `mention`, `friend`, `online`, `ingame`, or `none` (silent). Left out, Steam decides, as always. Most are only audible in Game Mode. Any other name is a `400`. |
 
 Answers: `200 {"ok": true, "shown": true}` when shown; `400` bad request; `413` too large; `415` not JSON;
@@ -46,7 +46,7 @@ being filled with what you already had) is answered `ignored`:
 Noty ships Comety (`bin/comety`, x86-64 only; its source is in [`comety/`](comety/)): a small program that watches a Comet SQLite database and POSTs each new
 achievement to `/notify/comet`. Noty runs it for you:
 
-1. When a game starts, Noty waits 5 seconds (for Comet to create its files) and then looks for every `gameplay.db` in
+1. When a game starts (Invasor's `game_started` event; Noty needs Invasor 0.2.0 or later), Noty waits 5 seconds (for Comet to create its files) and then looks for every `gameplay.db` in
    `~/.local/share/Steam/steamapps/compatdata/<AppId>/pfx/drive_c/users/steamuser/AppData/Local/comet/gameplay/` and
    its subfolders. If there is none, it tries again after 10 s and once more after 15 s, then gives up.
 2. For each one it starts `comety --url http://127.0.0.1:<port>/notify/comet --quiet <database>`. The tab lists them,

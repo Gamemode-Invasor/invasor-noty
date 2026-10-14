@@ -27,7 +27,7 @@ from pathlib import Path
 
 HOST = "127.0.0.1"
 MAX_BODY = 768 << 10  # room for an embedded image (data:…) of up to 512 KB
-MAX_ICON_FILE = 384 << 10
+MAX_ICON_FILE = 384 << 10  # the core takes 512 KB of data: URI, and base64 adds a third
 RATE, RATE_WINDOW = 5, 10.0
 IMAGE_TYPES = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif", ".webp": "webp"}
 SOUNDS = ("trophy", "message", "toast", "chat", "mention", "friend", "online", "ingame", "none")

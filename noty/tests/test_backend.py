@@ -43,6 +43,21 @@ class FakeSettings:
             cb(key, value)
 
 
+class FakeEvents:
+    def __init__(self):
+        self.cbs = {}
+
+    def on(self, name, cb):
+        self.cbs.setdefault(name, []).append(cb)
+
+    def off(self, name, cb):
+        self.cbs[name].remove(cb)
+
+    def emit(self, name, payload):
+        for cb in list(self.cbs.get(name, [])):
+            cb(dict(payload))
+
+
 class FakeCtx:
     InvalidArgument = InvalidArgument
     Unavailable = Unavailable
@@ -52,6 +67,12 @@ class FakeCtx:
         self.log = logging.getLogger("test.noty")
         self.shown, self.bodies, self.icons, self.sounds = [], [], [], []
         self.game = types.SimpleNamespace(running=None)
+        self.events = FakeEvents()
+
+    def stop_game(self):
+        """The game being played ends: running goes, and the core sends game_stopped."""
+        game, self.game.running = self.game.running, None
+        self.events.emit("game_stopped", game)
 
     def notify(self, title, body="", icon="", sound=""):
         self.shown.append(title)
@@ -102,7 +123,7 @@ class Backend(unittest.TestCase):
         """A backend with a game running, a (mocked) comety, and the databases that were found."""
         b = load_backend()
         comet = submodule(b, "endpoint_comet")
-        comet.GAME_WAITS, comet.GAME_POLL = (0.01, 0.01, 0.01), 0.01
+        comet.GAME_WAITS = (0.01, 0.01, 0.01)
         comet.games = mock.Mock(gameplay_dbs=mock.Mock(return_value=list(dbs)), logo_files=mock.Mock(return_value=[]))
         popen = mock.patch.object(comet.subprocess, "Popen").start()
         popen.return_value.poll.return_value = None
@@ -135,7 +156,7 @@ class Backend(unittest.TestCase):
         self.assertEqual(self.details(b), ["● Comety: /a/gameplay.db", "● Comety: /b/gameplay.db"])
         self.assertEqual((ctx.shown, ctx.bodies), (["Comet - Lil Gator Game"], ["Noty is connecting to Lil Gator Game"]))
         self.assertEqual(ctx.sounds, ["online"])
-        ctx.game.running = None  # the game ends: comety stops, and it's said
+        ctx.stop_game()  # the game ends: comety stops, and it's said
         self.wait_for(lambda: self.details(b) == ["Comety: waiting for a game with Comet"])
         self.assertEqual(popen.return_value.terminate.call_count, 2)
         self.assertEqual((ctx.shown[1], ctx.bodies[1]), ("Comet - Lil Gator Game", "Noty disconnected from Lil Gator Game"))
@@ -151,7 +172,7 @@ class Backend(unittest.TestCase):
         self.assertNotEqual(ctx.icons[0], "")
         logo = HERE / "assets" / "comety.png"  # any real image will do as the game's logo
         comet.games.logo_files.return_value = [str(logo)]
-        ctx.game.running = None
+        ctx.stop_game()
         self.wait_for(lambda: len(ctx.icons) == 2)
         self.assertTrue(ctx.icons[1].startswith("data:image/png;base64,"))
 
@@ -193,6 +214,44 @@ class Backend(unittest.TestCase):
         self.wait_for(lambda: self.details(b) == [])
         self.assertEqual(popen.return_value.terminate.call_count, 2)
         self.assertEqual(ctx.bodies[-1], "Noty disconnected from TOEM")
+
+    def test_a_game_that_starts_later_is_followed_through_events(self):
+        b, comet, ctx, popen, _ = self.started(None)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        game = {"appid": "123", "name": "TOEM", "shortcut": False}
+        ctx.game.running = game
+        ctx.events.emit("game_started", game)
+        ctx.events.emit("game_started", game)  # the same game again (already running at start): one search
+        self.wait_for(lambda: popen.call_count == 2)
+        time.sleep(0.1)
+        self.assertEqual((popen.call_count, ctx.shown), (2, ["Comet - TOEM"]))
+        ctx.events.emit("game_stopped", {"appid": "999", "name": "other", "shortcut": False})  # not this one
+        time.sleep(0.05)
+        self.assertEqual(ctx.shown, ["Comet - TOEM"])
+        ctx.stop_game()
+        self.assertEqual(ctx.bodies[-1], "Noty disconnected from TOEM")
+
+    def test_a_game_that_ends_while_looking_stops_the_search(self):
+        b, comet, ctx, popen, _ = self.started({"appid": "5", "name": "x"}, dbs=())
+        comet.GAME_WAITS = (0.2, 0.2, 0.2)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        ctx.stop_game()
+        comet.games.gameplay_dbs.return_value = ["/a/gameplay.db"]
+        time.sleep(0.5)
+        comet.games.gameplay_dbs.assert_not_called()
+        self.assertEqual((popen.call_count, ctx.shown), (0, []))
+
+    def test_it_listens_only_while_on(self):
+        b, comet, ctx, popen, _ = self.started(None)
+        b.setup(ctx)
+        self.addCleanup(b.teardown)
+        self.assertEqual({k: len(v) for k, v in ctx.events.cbs.items()}, {"game_started": 1, "game_stopped": 1})
+        ctx.settings.change("endpoint_comet", False)
+        self.assertEqual({k: len(v) for k, v in ctx.events.cbs.items()}, {"game_started": 0, "game_stopped": 0})
+        ctx.settings.change("endpoint_comet", True)
+        self.assertEqual({k: len(v) for k, v in ctx.events.cbs.items()}, {"game_started": 1, "game_stopped": 1})
 
     def test_a_notification_without_an_image_gets_its_endpoints_or_noty_s(self):
         b, comet, ctx, popen, _ = self.started(None)

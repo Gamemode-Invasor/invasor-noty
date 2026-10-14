@@ -1,5 +1,6 @@
 {
   "api": 1,
+  "min_core": "0.2.0",
   "name": "Noty",
   "version": "0.3.0",
   "author": "FranjeGueje",
