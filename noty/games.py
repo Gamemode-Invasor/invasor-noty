@@ -97,9 +97,9 @@ def comet_others(appid, proc="/proc"):
     return sorted({str(prefix) for prefix in comet_processes(proc).values() if prefix != str(appid)})
 
 
-def port_owned_by(pid, port=COMET_PORT, proc="/proc", net="/proc/net/tcp"):
-    """Whether the process listens on 127.0.0.1:port. It reads the kernel's tables, so nothing connects to Comet
-    (it would take it for a client, and log it)."""
+def _listening_inodes(port, net):
+    """The inodes of the sockets listening on 127.0.0.1:port, from the kernel's table (no connection to the port, which
+    Comet would take for a client and log)."""
     wanted = f"0100007F:{port:04X}"
     inodes = set()
     try:
@@ -109,7 +109,18 @@ def port_owned_by(pid, port=COMET_PORT, proc="/proc", net="/proc/net/tcp"):
                 if len(cols) > 9 and cols[1] == wanted and cols[3] == "0A":  # 0A: LISTEN
                     inodes.add(cols[9])
     except OSError:
-        return False
+        pass
+    return inodes
+
+
+def port_listening(port=COMET_PORT, net="/proc/net/tcp"):
+    """Whether anything listens on 127.0.0.1:port."""
+    return bool(_listening_inodes(port, net))
+
+
+def port_owned_by(pid, port=COMET_PORT, proc="/proc", net="/proc/net/tcp"):
+    """Whether the process listens on 127.0.0.1:port."""
+    inodes = _listening_inodes(port, net)
     if not inodes:
         return False
     fds = os.path.join(proc, str(pid), "fd")

@@ -119,3 +119,6 @@ class Comet(unittest.TestCase):
             self.assertFalse(games.port_owned_by(20, 9978, proc, net))  # another port
             self.assertFalse(games.port_owned_by(77, 9977, proc, net))  # no such process
             self.assertFalse(games.port_owned_by(20, 9977, proc, str(Path(d) / "nothing")))
+            self.assertTrue(games.port_listening(9977, net))
+            self.assertFalse(games.port_listening(9978, net))
+            self.assertFalse(games.port_listening(9977, str(Path(d) / "nothing")))

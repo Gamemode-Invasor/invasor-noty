@@ -380,7 +380,8 @@ class GogComet(unittest.TestCase):
                                    is_gog_launcher=mock.Mock(return_value=True),
                                    comet_pid=mock.Mock(return_value=None),
                                    comet_others=mock.Mock(return_value=[]),
-                                   port_owned_by=mock.Mock(return_value=False))
+                                   port_owned_by=mock.Mock(return_value=False),
+                                   port_listening=mock.Mock(return_value=False))
         self.gog.logo = mock.Mock(return_value="")
         self.ctx = FakeCtx(free_port())
         self.ctx.game.shortcut_exe = mock.Mock(return_value="/runner/Blade.bat")
@@ -445,7 +446,7 @@ class GogComet(unittest.TestCase):
         self.ctx.events.emit("game_started", self.GAME)
         self.wait_for(lambda: self.ctx.shown)
         self.assertEqual((self.ctx.shown, self.ctx.bodies, self.ctx.sounds),
-                         (["Comet - Blade of Darkness"], ["Comet isn't ready: port 9977"], ["mention"]))
+                         (["Comet - Blade of Darkness"], ["Comet isn't ready: port 9977"], ["trophy"]))
 
     def test_a_config_lost_while_comet_runs_is_put_back_with_a_restart_warning(self):
         self.gog.games.comet_pid.return_value = 4321
@@ -491,7 +492,7 @@ class GogComet(unittest.TestCase):
         self.gog.games.comet_others.return_value = ["999"]  # nothing runs for this game, another Comet does
         self.ctx.events.emit("game_started", self.GAME)
         self.wait_for(lambda: self.ctx.shown)
-        self.assertEqual(self.ctx.sounds, ["mention"])
+        self.assertEqual(self.ctx.sounds, ["trophy"])
         self.assertIn("another game (999)", self.ctx.bodies[0])
         self.assertNotIn("connected", self.ctx.bodies[0])
         self.gog.games.comet_pid.assert_called_with("123")
@@ -503,3 +504,33 @@ class GogComet(unittest.TestCase):
         self.wait_for(lambda: self.ctx.shown)
         self.gog.games.port_owned_by.assert_called_with(4321)
         self.assertEqual(self.ctx.bodies, ["Comet isn't ready: port 9977"])
+
+    def test_a_port_left_open_when_the_game_starts_is_an_error(self):
+        self.gog.games.port_listening.return_value = True  # another game's Comet (or anything) holds it
+        self.ctx.events.emit("game_started", self.GAME)
+        self.wait_for(lambda: self.ctx.shown)
+        self.assertEqual((self.ctx.shown, self.ctx.bodies, self.ctx.sounds),
+                         (["Comet"], ["ERROR: the game can't connect to Comet (port 9977 is in use)"], ["trophy"]))
+        time.sleep(0.2)  # the watch gives up without saying it again
+        self.assertEqual(len(self.ctx.shown), 1)
+        self.assertIn("⚠ port in use when the game started", self.b.status()["endpoints"][1]["details"][0])
+
+    def test_the_port_of_this_games_own_comet_is_not_an_error(self):
+        self.gog.games.port_listening.return_value = True
+        self.gog.games.comet_pid.return_value = 4321
+        self.gog.games.port_owned_by.return_value = True
+        self.ctx.events.emit("game_started", self.GAME)
+        self.wait_for(lambda: self.ctx.shown)
+        self.assertEqual(self.ctx.bodies, ["Comet connected"])
+
+    def test_a_free_port_says_nothing_at_start(self):
+        self.ctx.events.emit("game_started", self.GAME)
+        time.sleep(0.02)
+        self.assertEqual(self.ctx.shown, [])
+
+    def test_the_port_of_a_game_that_is_not_gog_is_nobody_s_business(self):
+        self.gog.games.is_gog_launcher.return_value = False
+        self.gog.games.port_listening.return_value = True
+        self.ctx.events.emit("game_started", self.GAME)
+        time.sleep(0.1)
+        self.assertEqual(self.ctx.shown, [])

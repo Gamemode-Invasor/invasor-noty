@@ -148,11 +148,23 @@ class GogComet(Endpoint):
                 if self._current == appid:
                     self._current, self._state = None, ""
             return
+        busy = self._port_taken(appid)
+        if busy:
+            self._say(appid, game.get("name") or str(appid), "Comet",
+                      f"ERROR: the game can't connect to Comet (port {games.COMET_PORT} is in use)", "trophy")
         with self._lock:
-            self._state = "waiting for Comet"
-        threading.Thread(target=self._watch, args=(game, path, cancel), name="noty-gog-comet", daemon=True).start()
+            self._state = f"○ port {games.COMET_PORT} in use" if busy else "waiting for Comet"
+        threading.Thread(target=self._watch, args=(game, path, cancel, busy), name="noty-gog-comet", daemon=True).start()
 
-    def _watch(self, game, path, cancel):
+    @staticmethod
+    def _port_taken(appid):
+        """Whether Comet's port is open and isn't this game's Comet: the one this game starts won't be able to listen on it."""
+        if not games.port_listening():
+            return False
+        pid = games.comet_pid(appid)
+        return not (pid and games.port_owned_by(pid))
+
+    def _watch(self, game, path, cancel, taken=False):
         """Check, every WATCH_WAIT seconds and up to WATCH_TRIES times, (a) that the config has Noty's URL, (b) that a comet.exe
         runs in the prefix of this game and (c) that this very process listens on Comet's port. Never raises."""
         appid, name = game["appid"], game.get("name") or str(game["appid"])
@@ -173,29 +185,34 @@ class GogComet(Endpoint):
                 with self._lock:
                     if cancel.is_set():
                         return
-                    self._state = self._describe(config, pid, port, others)
+                    self._state = self._describe(config, pid, port, others, taken and not pid)
                 if config and pid and port:
                     self._say(appid, name, f"Comet - {name}", "Comet connected", "online")
                     return
                 if cancel.wait(WATCH_WAIT) or self._stop.is_set():
                     return
+            if taken and not pid:
+                return  # said already when the game started
             if others:
                 reason = f"the Comet of another game ({', '.join(others)}) is running and holds port {games.COMET_PORT}"
             else:
                 reason = ", ".join(label for label, ok in (("config", config), ("comet.exe of this game", bool(pid)),
                                                            (f"port {games.COMET_PORT}", port)) if not ok)
-            self._say(appid, name, f"Comet - {name}", f"Comet isn't ready: {reason}", "mention")
+            self._say(appid, name, f"Comet - {name}", f"Comet isn't ready: {reason}", "trophy")
         except Exception:
             self.host.log.exception("watching Comet failed")
 
     @staticmethod
-    def _describe(config, pid, port, others=()):
+    def _describe(config, pid, port, others=(), taken=False):
         mark = lambda ok: "●" if ok else "○"
         text = (f"{mark(config)} config  {mark(pid)} comet.exe{f' ({pid})' if pid else ''}  "
                 f"{mark(port)} port {games.COMET_PORT}")
-        return f"{text}  ⚠ Comet of another game: {', '.join(others)}" if others else text
+        if others:
+            text += f"  ⚠ Comet of another game: {', '.join(others)}"
+        return text + "  ⚠ port in use when the game started" if taken else text
 
     def _say(self, appid, name, title, body, sound):
         if self._stop.is_set() or self._current != appid:
             return
+        self.host.log.info("%s: %s", title, body)
         self.host.announce(self, title, body, logo(appid), sound=sound)
