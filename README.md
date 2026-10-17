@@ -28,7 +28,8 @@ Each program can send its own format to its own endpoint; Noty turns it into a n
 | Endpoint | For | Payload |
 |---|---|---|
 | `/notify` | general: your scripts and any program | `{"title", "body", "icon", "sound"}` as above. Unknown fields are an error. |
-| `/notify/comet` | [Comet](https://github.com/imLinguin/comet) (GOG) | Comet's unlocked achievement, sent as a flat JSON object. |
+| `/cometa/db` | [Comet](https://github.com/imLinguin/comet) (GOG) | Comet's unlocked achievement, sent as a flat JSON object. |
+| `/cometa` | [Comet](https://github.com/imLinguin/comet) (GOG), straight from Comet | The `custom_event` Comet itself POSTs: `{"name": "achievement_unlocked", "client_id", "data": {…achievement…}}`. |
 
 For Comet, the notification takes `name` as the title, `description` (and the `rarity`) as the body, and
 `image_url_unlocked` as the icon. Other fields are ignored, so new ones in Comet don't break anything. Only an
@@ -42,14 +43,47 @@ being filled with what you already had) is answered `ignored`:
  "changed": 0, "rarity": 70.6, "rarity_level_description": "Common", "rarity_level_slug": "common"}
 ```
 
+For `/cometa` (needs a Comet with `custom_event`, branch `feat/custom-notifs`), the notification is the same,
+taken from `data` (`name`, `description`, `rarity`, `image_url_unlocked`). Only `data.date_unlocked` within the last
+5 minutes is shown; any other `name` than `achievement_unlocked` is answered `ignored`. It does not read Comet's
+database, so with Comety also on, an achievement shows twice.
+
+Noty sets Comet up by itself. A game is from GOG, and will run Comet, when it is a Steam shortcut whose `.bat` has
+`set "STORE=gog"` (the way Rakun writes it). As soon as such a game is selected (or starts), Noty puts this block, with
+its own port, in Comet's `config.toml` of the game's prefix
+(`compatdata/<appid>/pfx/drive_c/users/steamuser/AppData/Roaming/comet/config.toml`), between `# noty:begin` and
+`# noty:end`. The rest of the file is kept, and it is not touched if it isn't valid TOML. Comet reads its config only
+when it starts, so it has to be there before the game launches; turning the endpoint off leaves it as it is.
+
+```toml
+# noty:begin (written by Noty, replaced every time)
+[[custom_event]]
+enabled = true
+url = "http://127.0.0.1:33811/cometa"
+# noty:end
+```
+
+When the game starts, Noty checks every 5 seconds (12 times) that **(a)** the config has that URL, **(b)** `comet.exe`
+is running and **(c)** Comet's port, 9977, is open. With the three, it shows "Comet - <game>: Comet connected";
+if they don't come, it says what is missing. If the config had to be put back while Comet was already running, it asks
+you to restart the game. The tab shows the state of the three.
+
+```json
+{"name": "achievement_unlocked", "client_id": "…",
+ "data": {"achievement_id": "…", "achievement_key": "…", "name": "…", "description": "…",
+          "image_url_locked": "https://images.gog.com/….jpg", "image_url_unlocked": "https://images.gog.com/….jpg",
+          "visible": false, "date_unlocked": "2026-10-16T21:30:00+00:00", "rarity": 46.6,
+          "rarity_level_description": "Common", "rarity_level_slug": "common"}}
+```
+
 ### Comety
 Noty ships Comety (`bin/comety`, x86-64 only; its source is in [`comety/`](comety/)): a small program that watches a Comet SQLite database and POSTs each new
-achievement to `/notify/comet`. Noty runs it for you:
+achievement to `/cometa/db`. Noty runs it for you:
 
 1. When a game starts (Invasor's `game_started` event; Noty needs Invasor 0.2.0 or later), Noty waits 5 seconds (for Comet to create its files) and then looks for every `gameplay.db` in
    `~/.local/share/Steam/steamapps/compatdata/<AppId>/pfx/drive_c/users/steamuser/AppData/Local/comet/gameplay/` and
    its subfolders. If there is none, it tries again after 10 s and once more after 15 s, then gives up.
-2. For each one it starts `comety --url http://127.0.0.1:<port>/notify/comet --quiet <database>`. The tab lists them,
+2. For each one it starts `comety --url http://127.0.0.1:<port>/cometa/db --quiet <database>`. The tab lists them,
    one per line.
 3. It shows a notification, "Comet - <game>" / "Noty is connecting to <game>", with the game's logo (the one you set in
    Steam, or else Steam's own, or else Comet's own image, `assets/comety.png`). It follows Do not disturb like any other.
@@ -100,11 +134,11 @@ Needs an Invasor core with `author` support in module.json.
   `none`): the Steam sound that notification plays. Without it nothing changes: Steam decides. Needs core v0.2.0.
 - Sounds of Noty's own: a Comet achievement always plays `trophy`; an endpoint turned on (and Comet connecting to a
   game) plays `online`, and one turned off (or the game ending) plays `mention`.
-- `/notify/comet` takes Comet's new payload: the unlocked achievement as a flat JSON object (`name`, `description`,
+- `/cometa/db` takes Comet's new payload: the unlocked achievement as a flat JSON object (`name`, `description`,
   `rarity`, `image_url_unlocked`…), no longer wrapped in an `event`. The cached local image (`image_path`) is gone.
 - Only an achievement unlocked in the last 5 minutes is shown (`unlock_time`); anything else is answered `ignored`.
 - New: Noty ships and runs **Comety** (`bin/comety`), which reads Comet's database and sends each new achievement to
-  `/notify/comet`. It starts for the running game (5 s after it starts, then again after 10 s and after 15 s), one per
+  `/cometa/db`. It starts for the running game (5 s after it starts, then again after 10 s and after 15 s), one per
   `gameplay.db` found, and stops with the game. With the Comet endpoint off it doesn't start at all. The tab lists them, and a notification tells you it's connecting.
 - Comety: only a real unlock is audited (the trigger is replaced in existing databases), sent rows are always marked
   as done, invalid rows (HTTP 400/422) are dropped, a failed send stops the batch and retries in order, it backs off

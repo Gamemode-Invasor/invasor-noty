@@ -89,7 +89,7 @@ class Service(Server):
         self.assertEqual({k: self.s.recent[0][k] for k in ("source", "ok", "muted")},
                          {"source": "general", "ok": True, "muted": None})
         self.assertEqual(self.request("GET", "/"),
-                         (200, {"ok": True, "service": "noty", "endpoints": ["/notify", "/notify/comet"]}))
+                         (200, {"ok": True, "service": "noty", "endpoints": ["/notify", "/cometa", "/cometa/db"]}))
 
     def test_bad_requests(self):
         cases = [
@@ -151,7 +151,7 @@ class Service(Server):
 
     def test_endpoint_off_answers_but_shows_nothing(self):
         self.on["comet"] = False
-        self.assertEqual(self.request(path="/notify/comet", body=comet_payload()),
+        self.assertEqual(self.request(path="/cometa/db", body=comet_payload()),
                          (200, {"ok": True, "shown": False, "reason": "endpoint_off"}))
         self.assertEqual(self.sent, [])
         self.assertEqual({k: self.s.recent[0][k] for k in ("source", "title", "muted")},
@@ -162,7 +162,7 @@ class Service(Server):
     def test_a_bad_request_is_still_400_when_silenced(self):
         self.on["general"], self.dnd = False, True
         self.assertEqual(self.request(body={"title": "x", "extra": 1})[0], 400)
-        self.assertEqual(self.request(path="/notify/comet", body={})[0], 400)
+        self.assertEqual(self.request(path="/cometa/db", body={})[0], 400)
 
     def test_do_not_disturb(self):
         self.dnd = True
@@ -195,7 +195,7 @@ def comet_payload(**fields):
 
 class Comet(Server):
     def post(self, body):
-        return self.request(path="/notify/comet", body=body)
+        return self.request(path="/cometa/db", body=body)
 
     def test_an_unlocked_achievement_is_shown(self):
         self.assertEqual(self.post(comet_payload()), (200, {"ok": True, "shown": True}))
@@ -228,6 +228,51 @@ class Comet(Server):
                 self.assertEqual(self.post(bad)[0], 400)
         self.assertEqual(self.post(comet_payload(name=" "))[0], 400)  # refused by send
         self.assertEqual(self.sent, [])
+
+
+def gog_comet_payload(**fields):
+    achievement = {"achievement_id": "47933258345671233", "achievement_key": "NECROMANCER", "name": "Necromancer",
+                   "description": "Help Yennefer.", "image_url_locked": "https://images.gog.com/8ac3_gac_60.png",
+                   "image_url_unlocked": "https://images.gog.com/002f_gac_60.jpg", "visible": False,
+                   "date_unlocked": now_utc().replace("+0000", "+00:00"), "rarity": 46.6,
+                   "rarity_level_description": "Common", "rarity_level_slug": "common"}
+    achievement.update(fields)
+    return {"name": "achievement_unlocked", "client_id": "1234567890123456", "data": achievement}
+
+
+class GogComet(Server):
+    def post(self, body):
+        return self.request(path="/cometa", body=body)
+
+    def test_an_unlocked_achievement_is_shown(self):
+        self.assertEqual(self.post(gog_comet_payload()), (200, {"ok": True, "shown": True}))
+        self.assertEqual(self.sent, [("Necromancer", "Help Yennefer. · 46.6%", "https://images.gog.com/002f_gac_60.jpg")])
+        self.assertEqual(self.s.recent[0]["source"], "gog_comet")
+        self.assertEqual(self.extra, [{"sound": "trophy"}])
+
+    def test_extra_fields_and_missing_ones_are_fine(self):
+        payload = gog_comet_payload(new_field=[1], rarity=None, description=None, image_url_unlocked="http://x/a.jpg")
+        payload["extra"] = 1
+        self.assertEqual(self.post(payload)[0], 200)
+        self.assertEqual(self.sent[0], ("Necromancer", "", ""))
+
+    def test_other_events_and_old_unlocks_are_ignored(self):
+        ignored = (200, {"ok": True, "shown": False, "reason": "ignored"})
+        self.assertEqual(self.post({**gog_comet_payload(), "name": "something_else"}), ignored)
+        for date in (None, "", "garbage", now_utc(3600).replace("+0000", "+00:00"), "2026-07-31T01:48:51+0000"):
+            with self.subTest(date=date):
+                self.assertEqual(self.post(gog_comet_payload(date_unlocked=date)), ignored)
+        self.assertEqual((self.sent, list(self.s.recent)), ([], []))
+
+    def test_the_achievement_is_required(self):
+        for bad in ({"name": "achievement_unlocked"}, {"name": "achievement_unlocked", "data": []},
+                    gog_comet_payload(name=5)):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.post(bad)[0], 400)
+        self.assertEqual(self.sent, [])
+
+    def test_the_flat_comety_format_is_not_this_one(self):
+        self.assertEqual(self.post(comet_payload())[1].get("shown"), False)
 
 
 class Limits(unittest.TestCase):
