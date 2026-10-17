@@ -153,16 +153,17 @@ class GogComet(Endpoint):
         threading.Thread(target=self._watch, args=(game, path, cancel), name="noty-gog-comet", daemon=True).start()
 
     def _watch(self, game, path, cancel):
-        """Check, every WATCH_WAIT seconds and up to WATCH_TRIES times, (a) that the config has Noty's URL, (b) that comet.exe
-        is running and (c) that its port is open. Never raises."""
+        """Check, every WATCH_WAIT seconds and up to WATCH_TRIES times, (a) that the config has Noty's URL, (b) that a comet.exe
+        runs in the prefix of this game and (c) that this very process listens on Comet's port. Never raises."""
         appid, name = game["appid"], game.get("name") or str(game["appid"])
         warned = False
         try:
             for _ in range(WATCH_TRIES):
                 url = self._url()
                 config = comet_config.has_url(path, url)
-                pid = games.comet_running()
-                port = bool(pid) and games.comet_listening()
+                pid = games.comet_pid(appid)
+                port = bool(pid) and games.port_owned_by(pid)
+                others = [] if pid else games.comet_others(appid)
                 if not config:
                     # Gone, or the port changed: put it back. A Comet that is already running won't read it until the game restarts.
                     self._prepare(game)
@@ -172,23 +173,27 @@ class GogComet(Endpoint):
                 with self._lock:
                     if cancel.is_set():
                         return
-                    self._state = self._describe(config, pid, port)
+                    self._state = self._describe(config, pid, port, others)
                 if config and pid and port:
                     self._say(appid, name, f"Comet - {name}", "Comet connected", "online")
                     return
                 if cancel.wait(WATCH_WAIT) or self._stop.is_set():
                     return
-            missing = ", ".join(label for label, ok in (("config", config), ("comet.exe", bool(pid)),
-                                                       (f"port {games.COMET_PORT}", port)) if not ok)
-            self._say(appid, name, f"Comet - {name}", f"Comet isn't ready: {missing}", "mention")
+            if others:
+                reason = f"the Comet of another game ({', '.join(others)}) is running and holds port {games.COMET_PORT}"
+            else:
+                reason = ", ".join(label for label, ok in (("config", config), ("comet.exe of this game", bool(pid)),
+                                                           (f"port {games.COMET_PORT}", port)) if not ok)
+            self._say(appid, name, f"Comet - {name}", f"Comet isn't ready: {reason}", "mention")
         except Exception:
             self.host.log.exception("watching Comet failed")
 
     @staticmethod
-    def _describe(config, pid, port):
+    def _describe(config, pid, port, others=()):
         mark = lambda ok: "●" if ok else "○"
-        return (f"{mark(config)} config  {mark(pid)} comet.exe{f' ({pid})' if pid else ''}  "
+        text = (f"{mark(config)} config  {mark(pid)} comet.exe{f' ({pid})' if pid else ''}  "
                 f"{mark(port)} port {games.COMET_PORT}")
+        return f"{text}  ⚠ Comet of another game: {', '.join(others)}" if others else text
 
     def _say(self, appid, name, title, body, sound):
         if self._stop.is_set() or self._current != appid:

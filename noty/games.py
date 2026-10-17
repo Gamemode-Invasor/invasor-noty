@@ -1,7 +1,6 @@
 """Finding Comet's databases and a game's logo on disk. Pure stdlib, no Invasor imports."""
 import os
 import re
-import socket
 from pathlib import Path
 
 STEAM = Path.home() / ".local/share/Steam"
@@ -46,30 +45,83 @@ def is_gog_launcher(path):
         return False
 
 
-def comet_running(proc="/proc"):
-    """The pid of a running comet.exe (a Windows program under Wine/Proton), or None."""
+def _comet_args(proc, entry):
+    try:
+        with open(os.path.join(proc, entry, "cmdline"), "rb") as f:
+            return f.read().split(b"\0")
+    except OSError:
+        return []  # gone, or not ours
+
+
+def _prefix_id(proc, entry):
+    """The id (the folder name in compatdata, the shortcut's AppId) of the prefix a process runs in, or None."""
+    try:
+        with open(os.path.join(proc, entry, "environ"), "rb") as f:
+            env = dict(item.split(b"=", 1) for item in f.read().split(b"\0") if b"=" in item)
+    except OSError:
+        return None
+    path = env.get(b"STEAM_COMPAT_DATA_PATH") or env.get(b"WINEPREFIX")
+    if not path:
+        return None
+    path = path.decode("utf-8", "replace").rstrip("/")
+    if path.endswith("/pfx"):
+        path = path[:-4]
+    return path.rsplit("/", 1)[-1] or None
+
+
+def comet_processes(proc="/proc"):
+    """{pid: prefix id} of every running comet.exe (a Windows program under Wine/Proton). The prefix id is None when
+    its environment can't be read."""
     try:
         entries = os.listdir(proc)
     except OSError:
-        return None
+        return {}
+    found = {}
     for entry in entries:
         if not entry.isdigit():
             continue
-        try:
-            with open(os.path.join(proc, entry, "cmdline"), "rb") as f:
-                args = f.read().split(b"\0")
-        except OSError:
-            continue  # gone, or not ours
-        for arg in args:
+        for arg in _comet_args(proc, entry):
             if arg.decode("utf-8", "replace").replace("\\", "/").rsplit("/", 1)[-1].lower() == "comet.exe":
-                return int(entry)
-    return None
+                found[int(entry)] = _prefix_id(proc, entry)
+                break
+    return found
 
 
-def comet_listening(port=COMET_PORT):
-    """Whether something accepts connections on Comet's port."""
+def comet_pid(appid, proc="/proc"):
+    """The pid of the comet.exe running in the prefix of the game (its shortcut's AppId), or None."""
+    return next((pid for pid, prefix in sorted(comet_processes(proc).items()) if prefix == str(appid)), None)
+
+
+def comet_others(appid, proc="/proc"):
+    """The prefix ids of the comet.exe that run for other games (None for a prefix that can't be told), sorted."""
+    return sorted({str(prefix) for prefix in comet_processes(proc).values() if prefix != str(appid)})
+
+
+def port_owned_by(pid, port=COMET_PORT, proc="/proc", net="/proc/net/tcp"):
+    """Whether the process listens on 127.0.0.1:port. It reads the kernel's tables, so nothing connects to Comet
+    (it would take it for a client, and log it)."""
+    wanted = f"0100007F:{port:04X}"
+    inodes = set()
     try:
-        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        with open(net) as f:
+            for line in list(f)[1:]:
+                cols = line.split()
+                if len(cols) > 9 and cols[1] == wanted and cols[3] == "0A":  # 0A: LISTEN
+                    inodes.add(cols[9])
     except OSError:
         return False
-    return True
+    if not inodes:
+        return False
+    fds = os.path.join(proc, str(pid), "fd")
+    try:
+        names = os.listdir(fds)
+    except OSError:
+        return False
+    for name in names:
+        try:
+            link = os.readlink(os.path.join(fds, name))
+        except OSError:
+            continue
+        if link.startswith("socket:[") and link[8:-1] in inodes:
+            return True
+    return False
