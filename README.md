@@ -129,6 +129,23 @@ Needs an Invasor core with `author` support in module.json.
 
 ## Changes
 
+### 0.4.0
+Noty's last release: it is being split into two modules, [Popy](https://github.com/Gamemode-Invasor/invasor-popy)
+for `/notify` and [Cometa](https://github.com/Gamemode-Invasor/invasor-cometa) for Comet.
+
+- New endpoint `/cometa`: the achievements Comet itself POSTs (its `custom_event` setting, `{"name":
+  "achievement_unlocked", "client_id", "data": {…}}`). Only `data.date_unlocked` within the last 5 minutes is shown;
+  any other `name` is answered `ignored`. Needs a Comet with `custom_event`.
+- Noty sets Comet up by itself: when a GOG game (a Steam shortcut whose `.bat` has `set "STORE=gog"`) is selected or
+  starts, it writes its `/cometa` URL in Comet's `config.toml` of the game's prefix, between `# noty:begin` and
+  `# noty:end`. The rest of the file is kept, and a file that isn't valid TOML is not touched.
+- When the game starts, Noty checks that the config has the URL, that the game's own `comet.exe` is running and that
+  it holds Comet's port (9977); then it shows "Comet connected", or says what is missing. If the config had to be put
+  back while Comet was running, it asks you to restart the game; if the port is already taken when a GOG game starts,
+  it warns that the game won't be able to reach Comet.
+- **Renamed:** `/notify/comet` is now `/cometa/db` ("Comet (fallback by db)"); Comety is pointed at it.
+- Settings: the two Comet endpoints have a section of their own. The tab no longer has the "How to send one" section.
+
 ### 0.3.0
 - `/notify` takes an optional `sound` (`trophy`, `message`, `toast`, `chat`, `mention`, `friend`, `online`, `ingame`,
   `none`): the Steam sound that notification plays. Without it nothing changes: Steam decides. Needs core v0.2.0.
