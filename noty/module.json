@@ -44,11 +44,24 @@
           "label": "General — /notify",
           "default": true,
           "hint": "Noty's own format: {\"title\", \"body\", \"icon\", \"sound\"}. Off: requests are answered, but nothing is shown."
+        }
+      ]
+    },
+    {
+      "section": "Comet",
+      "open": false,
+      "items": [
+        {
+          "key": "endpoint_gog_comet",
+          "type": "toggle",
+          "label": "Comet — /cometa",
+          "default": true,
+          "hint": "Achievements sent by Comet itself (its custom_event setting). Off: requests are answered, but nothing is shown."
         },
         {
           "key": "endpoint_comet",
           "type": "toggle",
-          "label": "Comet — /notify/comet",
+          "label": "Comet (fallback by db) — /cometa/db",
           "default": true,
           "hint": "Achievements unlocked in GOG games run through Comet. Off: requests are answered, but nothing is shown."
         }

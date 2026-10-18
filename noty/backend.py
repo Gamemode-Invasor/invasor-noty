@@ -1,7 +1,7 @@
 """Noty: show Steam notifications (as Steam shows an achievement) from a local web service.
 
 Programs on this machine POST JSON to http://127.0.0.1:<port>/notify, or to the endpoint
-of their own format (/notify/comet…, see endpoints.py), and Invasor's core shows it
+of their own format (/cometa/db…, see endpoints.py), and Invasor's core shows it
 (ctx.notify). If Steam can't show notifications, the request gets a 503 and nothing else
 is affected; if the port is taken, the tab says so. Each endpoint can be turned off, and
 "do not disturb" silences them all; both are read live, without restarting the service.
