@@ -67,6 +67,6 @@ class Endpoint:
 
 def build():
     """Every endpoint, by name, in the order they are listed."""
-    from . import endpoint_comet, endpoint_general
-    endpoints = [endpoint_general.General(), endpoint_comet.Comet()]
+    from . import endpoint_comet, endpoint_general, endpoint_gog_comet
+    endpoints = [endpoint_general.General(), endpoint_gog_comet.GogComet(), endpoint_comet.Comet()]
     return {ep.name: ep for ep in endpoints}

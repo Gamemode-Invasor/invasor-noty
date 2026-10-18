@@ -1,7 +1,9 @@
 import http.client
 import json
 import logging
+import os
 import socket
+import tempfile
 import time
 import types
 import unittest
@@ -66,7 +68,7 @@ class FakeCtx:
         self.settings = FakeSettings({**defaults(), "enabled": True, "port": port})
         self.log = logging.getLogger("test.noty")
         self.shown, self.bodies, self.icons, self.sounds = [], [], [], []
-        self.game = types.SimpleNamespace(running=None)
+        self.game = types.SimpleNamespace(running=None, selected=None, shortcut_exe=lambda appid: None)
         self.events = FakeEvents()
 
     def stop_game(self):
@@ -107,8 +109,8 @@ class Backend(unittest.TestCase):
         st = b.status()
         self.assertTrue(st["dnd"])
         self.assertEqual([(e["path"], e["on"]) for e in st["endpoints"]],
-                         [("/notify", True), ("/notify/comet", False)])
-        self.assertEqual(st["endpoints"][1]["url"], f"http://127.0.0.1:{st['port']}/notify/comet")
+                         [("/notify", True), ("/cometa", True), ("/cometa/db", False)])
+        self.assertEqual(st["endpoints"][2]["url"], f"http://127.0.0.1:{st['port']}/cometa/db")
         self.assertEqual(server.receive("general", "x", "", ""), "do_not_disturb")
         self.assertEqual(server.receive("comet", "x", "", ""), "endpoint_off")
         self.assertTrue(b.test())  # the test button ignores the silences
@@ -141,14 +143,14 @@ class Backend(unittest.TestCase):
         self.fail("timed out")
 
     def details(self, b):
-        return b.status()["endpoints"][1]["details"]
+        return b.status()["endpoints"][2]["details"]
 
     def test_comety_runs_for_each_database_of_the_game_being_played(self):
         b, comet, ctx, popen, chmod = self.started({"appid": "123", "name": "Lil Gator Game"})
         b.setup(ctx)
         self.addCleanup(b.teardown)
         self.wait_for(lambda: popen.call_count == 2)
-        url = f"http://127.0.0.1:{b.status()['port']}/notify/comet"
+        url = f"http://127.0.0.1:{b.status()['port']}/cometa/db"
         self.assertEqual([c.args[0][1:] for c in popen.call_args_list],
                          [["--url", url, "--quiet", "/a/gameplay.db"], ["--url", url, "--quiet", "/b/gameplay.db"]])
         chmod.assert_called_with(comet.COMETY_BIN, 0o755)
@@ -247,11 +249,15 @@ class Backend(unittest.TestCase):
         b, comet, ctx, popen, _ = self.started(None)
         b.setup(ctx)
         self.addCleanup(b.teardown)
-        self.assertEqual({k: len(v) for k, v in ctx.events.cbs.items()}, {"game_started": 1, "game_stopped": 1})
+        counts = lambda: {k: len(v) for k, v in ctx.events.cbs.items()}
+        # Comet follows the games being played; GOG Comet also the selected one
+        self.assertEqual(counts(), {"game_started": 2, "game_stopped": 2, "game_selected": 1})
         ctx.settings.change("endpoint_comet", False)
-        self.assertEqual({k: len(v) for k, v in ctx.events.cbs.items()}, {"game_started": 0, "game_stopped": 0})
+        self.assertEqual(counts(), {"game_started": 1, "game_stopped": 1, "game_selected": 1})
         ctx.settings.change("endpoint_comet", True)
-        self.assertEqual({k: len(v) for k, v in ctx.events.cbs.items()}, {"game_started": 1, "game_stopped": 1})
+        self.assertEqual(counts(), {"game_started": 2, "game_stopped": 2, "game_selected": 1})
+        ctx.settings.change("endpoint_gog_comet", False)
+        self.assertEqual(counts(), {"game_started": 1, "game_stopped": 1, "game_selected": 0})
 
     def test_a_notification_without_an_image_gets_its_endpoints_or_noty_s(self):
         b, comet, ctx, popen, _ = self.started(None)
@@ -270,8 +276,8 @@ class Backend(unittest.TestCase):
         when = time.strftime("%Y-%m-%dT%H:%M:%S+0000", time.gmtime())
         self.assertEqual(post("/notify", {"title": "Hi"}), 200)  # General has no image: Noty's
         self.assertEqual(post("/notify", {"title": "Hi", "icon": "https://x.example/a.png"}), 200)
-        self.assertEqual(post("/notify/comet", {"name": "Won", "unlock_time": when}), 200)  # Comet's own
-        self.assertEqual(post("/notify/comet", {"name": "Won", "unlock_time": when,
+        self.assertEqual(post("/cometa/db", {"name": "Won", "unlock_time": when}), 200)  # Comet's own
+        self.assertEqual(post("/cometa/db", {"name": "Won", "unlock_time": when,
                                                 "image_url_unlocked": "https://x.example/b.png"}), 200)
         self.assertEqual(ctx.icons, [endpoints.default_icon(), "https://x.example/a.png",
                                      b.eps["comet"].icon_data(), "https://x.example/b.png"])
@@ -356,3 +362,175 @@ class Backend(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GogComet(unittest.TestCase):
+    """GOG Comet: the config of Comet is set when a GOG game is selected, and Comet is watched when it starts."""
+    GAME = {"appid": "123", "name": "Blade of Darkness", "shortcut": True}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = os.path.join(self.tmp.name, "comet", "config.toml")
+        self.b = load_backend()
+        self.gog = submodule(self.b, "endpoint_gog_comet")
+        self.gog.WATCH_WAIT = 0.01
+        self.gog.WATCH_TRIES = 3
+        self.gog.games = mock.Mock(COMET_PORT=9977, comet_config=mock.Mock(return_value=self.config),
+                                   is_gog_launcher=mock.Mock(return_value=True),
+                                   comet_pid=mock.Mock(return_value=None),
+                                   comet_others=mock.Mock(return_value=[]),
+                                   port_owned_by=mock.Mock(return_value=False),
+                                   port_listening=mock.Mock(return_value=False))
+        self.gog.logo = mock.Mock(return_value="")
+        self.ctx = FakeCtx(free_port())
+        self.ctx.game.shortcut_exe = mock.Mock(return_value="/runner/Blade.bat")
+        self.ctx.settings.values["endpoint_comet"] = False  # only GOG Comet
+        self.b.setup(self.ctx)
+        self.addCleanup(self.b.teardown)
+        self.url = f"http://127.0.0.1:{self.b.status()['port']}/cometa"
+
+    def wait_for(self, cond):
+        for _ in range(300):
+            if cond():
+                return
+            time.sleep(0.01)
+        self.fail("timed out")
+
+    def written(self):
+        with open(self.config, encoding="utf-8") as f:
+            return f.read()
+
+    def test_selecting_a_gog_game_sets_the_config_with_noty_s_port(self):
+        self.ctx.events.emit("game_selected", self.GAME)
+        self.assertIn(f'url = "{self.url}"', self.written())
+        self.gog.games.comet_config.assert_called_with("123")
+        self.ctx.game.shortcut_exe.assert_called_with("123")
+
+    def test_other_games_are_left_alone(self):
+        self.gog.games.is_gog_launcher.return_value = False
+        self.ctx.events.emit("game_selected", self.GAME)  # a shortcut that isn't from GOG
+        self.ctx.events.emit("game_selected", {"appid": "9", "name": "Steam game", "shortcut": False})
+        self.assertFalse(os.path.exists(self.config))
+
+    def test_a_broken_config_is_not_touched(self):
+        os.makedirs(os.path.dirname(self.config))
+        with open(self.config, "w") as f:
+            f.write("this is [not toml")
+        self.ctx.events.emit("game_selected", self.GAME)
+        self.assertEqual(self.written(), "this is [not toml")
+
+    def test_comet_up_with_its_port_open_says_so_once(self):
+        self.gog.games.comet_pid.return_value = 4321
+        self.gog.games.port_owned_by.return_value = True
+        self.ctx.events.emit("game_started", self.GAME)
+        self.wait_for(lambda: self.ctx.shown)
+        time.sleep(0.1)
+        self.assertEqual((self.ctx.shown, self.ctx.bodies, self.ctx.sounds),
+                         (["Comet - Blade of Darkness"], ["Comet connected"], ["online"]))
+        self.assertTrue(self.gog.comet_config.has_url(self.config, self.url))
+        self.assertIn("● config  ● comet.exe (4321)  ● port 9977", self.b.status()["endpoints"][1]["details"][0])
+
+    def test_it_waits_for_comet_and_then_says_so(self):
+        self.gog.games.comet_pid.return_value = None
+        self.ctx.events.emit("game_started", self.GAME)
+        time.sleep(0.02)
+        self.assertEqual(self.ctx.shown, [])
+        self.gog.WATCH_TRIES = 300
+        self.gog.games.comet_pid.return_value = 4321
+        self.gog.games.port_owned_by.return_value = True
+        self.wait_for(lambda: self.ctx.shown)
+
+    def test_it_says_what_is_missing_when_it_gives_up(self):
+        self.gog.games.comet_pid.return_value = 4321  # running, but the port never opens
+        self.ctx.events.emit("game_started", self.GAME)
+        self.wait_for(lambda: self.ctx.shown)
+        self.assertEqual((self.ctx.shown, self.ctx.bodies, self.ctx.sounds),
+                         (["Comet - Blade of Darkness"], ["Comet isn't ready: port 9977"], ["trophy"]))
+
+    def test_a_config_lost_while_comet_runs_is_put_back_with_a_restart_warning(self):
+        self.gog.games.comet_pid.return_value = 4321
+        self.gog.games.port_owned_by.return_value = True
+        self.gog.WATCH_WAIT = 0.05
+        with mock.patch.object(self.gog.comet_config, "has_url", side_effect=[False, True]):
+            self.ctx.events.emit("game_started", self.GAME)
+            self.wait_for(lambda: len(self.ctx.shown) == 2)
+        self.assertEqual(self.ctx.sounds, ["mention", "online"])
+        self.assertIn("Restart the game", self.ctx.bodies[0])
+        self.assertIn(self.url, self.written())
+
+    def test_a_game_that_ends_stops_the_watch(self):
+        self.ctx.events.emit("game_started", self.GAME)
+        self.ctx.events.emit("game_stopped", self.GAME)
+        self.gog.games.comet_pid.return_value = 4321
+        self.gog.games.port_owned_by.return_value = True
+        time.sleep(0.1)
+        self.assertEqual(self.ctx.shown, [])
+
+    def test_a_game_that_is_not_gog_is_not_watched(self):
+        self.gog.games.is_gog_launcher.return_value = False
+        self.gog.games.comet_pid.return_value = 4321
+        self.gog.games.port_owned_by.return_value = True
+        self.ctx.events.emit("game_started", self.GAME)
+        time.sleep(0.1)
+        self.assertEqual(self.ctx.shown, [])
+        self.assertEqual(self.b.status()["endpoints"][1]["details"], ["Comet: waiting for a game"])
+
+    def test_turning_it_on_in_the_middle_of_a_session_catches_up(self):
+        self.ctx.settings.change("endpoint_gog_comet", False)
+        self.ctx.game.selected = self.GAME
+        self.ctx.settings.change("endpoint_gog_comet", True)
+        self.assertIn(self.url, self.written())
+
+    def test_turning_it_off_leaves_the_config(self):
+        self.ctx.events.emit("game_selected", self.GAME)
+        self.ctx.settings.change("endpoint_gog_comet", False)
+        self.assertIn(self.url, self.written())
+        self.assertEqual(self.ctx.shown, [])  # and says nothing
+
+    def test_a_comet_of_another_game_holding_the_port_is_not_a_connection(self):
+        self.gog.games.comet_others.return_value = ["999"]  # nothing runs for this game, another Comet does
+        self.ctx.events.emit("game_started", self.GAME)
+        self.wait_for(lambda: self.ctx.shown)
+        self.assertEqual(self.ctx.sounds, ["trophy"])
+        self.assertIn("another game (999)", self.ctx.bodies[0])
+        self.assertNotIn("connected", self.ctx.bodies[0])
+        self.gog.games.comet_pid.assert_called_with("123")
+
+    def test_the_port_must_be_owned_by_the_comet_of_the_game(self):
+        self.gog.games.comet_pid.return_value = 4321
+        self.gog.games.port_owned_by.return_value = False
+        self.ctx.events.emit("game_started", self.GAME)
+        self.wait_for(lambda: self.ctx.shown)
+        self.gog.games.port_owned_by.assert_called_with(4321)
+        self.assertEqual(self.ctx.bodies, ["Comet isn't ready: port 9977"])
+
+    def test_a_port_left_open_when_the_game_starts_is_an_error(self):
+        self.gog.games.port_listening.return_value = True  # another game's Comet (or anything) holds it
+        self.ctx.events.emit("game_started", self.GAME)
+        self.wait_for(lambda: self.ctx.shown)
+        self.assertEqual((self.ctx.shown, self.ctx.bodies, self.ctx.sounds),
+                         (["Comet"], ["ERROR: the game can't connect to Comet (port 9977 is in use)"], ["trophy"]))
+        time.sleep(0.2)  # the watch gives up without saying it again
+        self.assertEqual(len(self.ctx.shown), 1)
+        self.assertIn("⚠ port in use when the game started", self.b.status()["endpoints"][1]["details"][0])
+
+    def test_the_port_of_this_games_own_comet_is_not_an_error(self):
+        self.gog.games.port_listening.return_value = True
+        self.gog.games.comet_pid.return_value = 4321
+        self.gog.games.port_owned_by.return_value = True
+        self.ctx.events.emit("game_started", self.GAME)
+        self.wait_for(lambda: self.ctx.shown)
+        self.assertEqual(self.ctx.bodies, ["Comet connected"])
+
+    def test_a_free_port_says_nothing_at_start(self):
+        self.ctx.events.emit("game_started", self.GAME)
+        time.sleep(0.02)
+        self.assertEqual(self.ctx.shown, [])
+
+    def test_the_port_of_a_game_that_is_not_gog_is_nobody_s_business(self):
+        self.gog.games.is_gog_launcher.return_value = False
+        self.gog.games.port_listening.return_value = True
+        self.ctx.events.emit("game_started", self.GAME)
+        time.sleep(0.1)
+        self.assertEqual(self.ctx.shown, [])

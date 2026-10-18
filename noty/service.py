@@ -3,7 +3,7 @@
 Pure stdlib, no Invasor imports: tested on its own (tests/test_service.py). It listens
 on 127.0.0.1 only, so only programs on this machine can use it.
 
-    POST <path>   an endpoint's payload (endpoint_*.py: /notify, /notify/comet…)
+    POST <path>   an endpoint's payload (endpoint_*.py: /notify, /cometa/db…)
     GET  /        {"ok": true, "service": "noty", "endpoints": [...]}
 
 Each endpoint (endpoints.py) has an adapt() that turns its payload into (title, body, icon[, sound]),

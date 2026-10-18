@@ -1,4 +1,4 @@
-"""/notify/comet: Comet's (GOG) unlocked achievements.
+"""/cometa/db: Comet's (GOG) unlocked achievements.
 
 Comet keeps each game's achievements in a SQLite database (gameplay.db). While this endpoint is on,
 Noty follows the game being played (Invasor's game_started / game_stopped events) and, for each database Comet keeps for it, runs Comety
@@ -41,10 +41,19 @@ def logo(appid):
     return ""
 
 
+def trophy(name, description, rarity, image_url):
+    """An unlocked achievement as (title, body, icon, sound): the description and the rarity as the body, the
+    https:// image as the icon, always the trophy sound."""
+    body = description if isinstance(description, str) else ""
+    if isinstance(rarity, (int, float)) and not isinstance(rarity, bool):
+        body = f"{body} · {rarity:.1f}%" if body else f"{rarity:.1f}%"
+    return name, body, image_url if isinstance(image_url, str) and image_url.startswith("https://") else "", "trophy"
+
+
 class Comet(Endpoint):
     name = "comet"
-    path = "/notify/comet"
-    label = "Comet"
+    path = "/cometa/db"
+    label = "Comet (fallback by db)"
     icon = "comety.png"
 
     def __init__(self):
@@ -64,13 +73,7 @@ class Comet(Endpoint):
             raise service.Rejected(400, "name is required")
         if not just_unlocked(data.get("unlock_time")):
             return None
-        body = data.get("description")
-        body = body if isinstance(body, str) else ""
-        rarity = data.get("rarity")
-        if isinstance(rarity, (int, float)) and not isinstance(rarity, bool):
-            body = f"{body} · {rarity:.1f}%" if body else f"{rarity:.1f}%"
-        url = data.get("image_url_unlocked")
-        return data["name"], body, url if isinstance(url, str) and url.startswith("https://") else "", "trophy"
+        return trophy(data["name"], data.get("description"), data.get("rarity"), data.get("image_url_unlocked"))
 
     def start(self, host):
         if self._registered:

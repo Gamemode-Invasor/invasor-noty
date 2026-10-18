@@ -1,7 +1,7 @@
 # Comety
 
 The small program Noty runs for [Comet](https://github.com/imLinguin/comet) (GOG). It watches Comet's SQLite database
-(`gameplay.db`) and POSTs each new unlocked achievement, as JSON, to a URL: Noty's `/notify/comet`. The binary Noty
+(`gameplay.db`) and POSTs each new unlocked achievement, as JSON, to a URL: Noty's `/cometa/db`. The binary Noty
 ships, `noty/bin/comety`, is built from this source. It's covered by this repository's license.
 
 ```
